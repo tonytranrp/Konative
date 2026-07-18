@@ -10,11 +10,12 @@ screenshot proof, not just a compile-clean claim.
 
 ## Hard rules
 
-- **Never built by Gradle/AGP.** Compiled by Konative's own `kotlinc`+Compose-compiler-plugin+`d8`/
-  `r8` pipeline (see `cmake/modules/` once the CMake automation lands — as of this file's writing
-  it is still a hand-run recipe, fully reproducible but not yet wired into CMake; see
-  `ARCHITECTURE.md` section 6.7's status table). `testapp/`'s Gradle build never sees these `.kt`
-  files at all — that module owns exactly one file,
+- **Never built by Gradle/AGP directly.** Compiled by Konative's own `kotlinc`+Compose-compiler-
+  plugin+`r8` pipeline, automated via `cmake/modules/KonativeEmbedKotlinDex.cmake`'s
+  `konative_embed_kotlin_dex()` (see `ARCHITECTURE.md` section 6.6/6.7's status table) —
+  `testapp/`'s Gradle build only *drives* this indirectly through `externalNativeBuild` invoking
+  the same root `CMakeLists.txt`, it never compiles these `.kt` files with its own Kotlin Gradle
+  plugin. `testapp/` itself owns exactly one file,
   `testapp/app/src/main/java/com/konative/testapp/MainActivity.kt`, and nothing here may ever be
   added to it.
 - **`com.konative.generated.KonativeEntryPoint`'s `@JvmStatic install(Application)` is the ONLY
@@ -113,9 +114,13 @@ order they were hit — each one was a real, reproduced on-device failure, not a
      were required together for the confirmed-working combination.
 
 No known blockers remain for this proof-of-concept's scope. Real, still-open, lower-priority items:
-the R8 optimizer bug in item 4 above (worked around, not root-caused), a real CMake automation for
-this whole pipeline (still hand-run), and `r_shim/`'s own stated stopgap status (a real AAPT2 step
-would remove the need for it).
+the R8 optimizer bug in item 4 above (worked around, not root-caused), and `r_shim/`'s own stated
+stopgap status (a real AAPT2 step would remove the need for it). The CMake automation for this
+whole pipeline has landed (`cmake/modules/KonativeEmbedKotlinDex.cmake`) — verified via both a
+direct `cmake --build` and a real `./gradlew assembleDebug`, both rendering correctly on-device; it
+surfaced one more reflection-stripped-by-R8 class (`androidx.compose.ui.platform.
+LifecycleRetainedValuesStoreOwner`, fixed in `r8-rules.pro`, same category as item 5 below) that
+the hand-run recipe's own classpath snapshot had never hit.
 
 ## Adding to this folder
 

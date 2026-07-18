@@ -67,15 +67,42 @@ android {
                     "-DKONATIVE_BUILD_TESTS=OFF",
                     "-DKONATIVE_BUILD_KOTLIN_NATIVE=OFF"
                 )
-                // src/platform/android/CMakeLists.txt hard-fails with a clear FATAL_ERROR if this
-                // isn't set (the automated kotlinc+Compose+d8 pipeline, ARCHITECTURE.md section 6.6,
-                // doesn't exist yet) - forwarded here, not re-validated, so there is exactly one
-                // place (CMake) that decides what counts as a valid path. Pass with:
+                // Optional manual override - src/platform/android/CMakeLists.txt falls back to the
+                // automated konative_embed_kotlin_dex() pipeline (kotlinc+r8, see
+                // cmake/modules/KonativeEmbedKotlinDex.cmake) when this isn't set, so it's no longer
+                // required the way it was before that pipeline existed. Still useful for a hand-built
+                // dex, or a machine without kotlinc/r8 installed. Pass with:
                 //   ./gradlew assembleDebug -PkonativeEmbeddedDexPath=<path to a real classes.dex>
                 val dexPath = (project.findProperty("konativeEmbeddedDexPath") as String?)
                     ?: System.getenv("KONATIVE_EMBEDDED_DEX_PATH")
                 if (dexPath != null) {
                     baseArgs += "-DKONATIVE_EMBEDDED_DEX_PATH=$dexPath"
+                }
+                // The automated pipeline's own machine-local toolchain paths - same forwarding shape
+                // as konativeNdkPath/konativeGitExecutable above, and the same variables
+                // CMakeUserPresets.json sets for a plain `cmake --preset` build (see that file and
+                // KonativeEmbedKotlinDex.cmake's own top comment). Only needed when konativeEmbeddedDexPath
+                // is NOT set - harmless to pass either way, since CMake ignores unused -D values with
+                // just a warning.
+                val kotlinc = (project.findProperty("konativeKotlinc") as String?)
+                    ?: System.getenv("KONATIVE_KOTLINC")
+                if (kotlinc != null) {
+                    baseArgs += "-DKONATIVE_KOTLINC=$kotlinc"
+                }
+                val r8 = (project.findProperty("konativeR8") as String?)
+                    ?: System.getenv("KONATIVE_R8")
+                if (r8 != null) {
+                    baseArgs += "-DKONATIVE_R8=$r8"
+                }
+                val androidJar = (project.findProperty("konativeAndroidJar") as String?)
+                    ?: System.getenv("KONATIVE_ANDROID_JAR")
+                if (androidJar != null) {
+                    baseArgs += "-DKONATIVE_ANDROID_JAR=$androidJar"
+                }
+                val kotlinClasspathDir = (project.findProperty("konativeKotlinClasspathDir") as String?)
+                    ?: System.getenv("KONATIVE_KOTLIN_CLASSPATH_DIR")
+                if (kotlinClasspathDir != null) {
+                    baseArgs += "-DKONATIVE_KOTLIN_CLASSPATH_DIR=$kotlinClasspathDir"
                 }
                 // BUILDING.md's documented git.cmd-shim workaround (CPM/FetchContent's internal
                 // `git rev-parse "HEAD^0"` breaks under an npm-installed git.cmd on Windows) -

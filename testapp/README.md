@@ -36,34 +36,51 @@ means `testapp/` needs a real `Activity`, not the framework-provided `android.ap
 
 ```sh
 cd testapp
-./gradlew assembleDebug -PkonativeEmbeddedDexPath=<path to a real classes.dex>
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+./gradlew assembleDebug \
+  -PkonativeNdkPath=<path to an installed NDK> \
+  -PkonativeKotlinc=<path to kotlinc(.bat)> \
+  -PkonativeR8=<path to r8(.bat)> \
+  -PkonativeAndroidJar=<path to android.jar> \
+  -PkonativeKotlinClasspathDir=<path to a pre-resolved dependency-jar directory>
+adb install -t -r app/build/intermediates/apk/debug/app-debug.apk
 ```
 
 (A `gradle wrapper` run — or opening this folder in Android Studio once — is needed once to
 generate `gradlew`/`gradle/wrapper/gradle-wrapper.jar`; neither is vendored in this skeleton.)
 
-`-PkonativeEmbeddedDexPath` is required — it forwards straight through to
-`src/platform/android/CMakeLists.txt`'s `KONATIVE_EMBEDDED_DEX_PATH` (see that file's own
-`FATAL_ERROR` message if you omit it). The automated `kotlinc`+Compose-compiler-plugin+`d8` CMake
-pipeline that would produce this dex automatically (`ARCHITECTURE.md` section 6.6) doesn't exist
-yet, so until it lands, point this at a hand-built `classes.dex` containing a
+**The `kotlinc`+Compose-compiler-plugin+`r8` CMake pipeline that produces the embedded dex is now
+automated** (`cmake/modules/KonativeEmbedKotlinDex.cmake`, `ARCHITECTURE.md` section 6.6) — the
+four `konative*`-prefixed properties above forward straight through to the matching CMake cache
+variables (`KONATIVE_KOTLINC`/`KONATIVE_R8`/`KONATIVE_ANDROID_JAR`/`KONATIVE_KOTLIN_CLASSPATH_DIR`,
+same machine-local-override pattern as `konativeNdkPath` below), which is what `src/platform/
+android/CMakeLists.txt` uses by default now. Each can also be set via the matching env var
+(`KONATIVE_KOTLINC`, `KONATIVE_R8`, `KONATIVE_ANDROID_JAR`, `KONATIVE_KOTLIN_CLASSPATH_DIR`) instead
+of a Gradle property. `KONATIVE_KOTLIN_CLASSPATH_DIR` must be a directory of pre-resolved
+dependency jars (Compose runtime/ui/foundation, activity, lifecycle-runtime/viewmodel, savedstate,
+kotlinx-coroutines-android — NOT kotlin-stdlib.jar, that's sourced automatically from the kotlinc
+distribution itself) — see `embedded_kotlin/README.md` for how this directory is currently
+produced; real Maven dependency resolution from CMake is still an open problem.
+
+`-PkonativeEmbeddedDexPath=<path to a real classes.dex>` (or the `KONATIVE_EMBEDDED_DEX_PATH` env
+var) remains available as a manual override — set it to skip the automated pipeline entirely and
+embed a hand-built or pre-built dex instead (containing a
 `com.konative.generated.KonativeEntryPoint` class with a `@JvmStatic install(Application)` static
-method (`src/platform/android/jni_onload.cpp` is what calls it). Can also be set via the
-`KONATIVE_EMBEDDED_DEX_PATH` environment variable instead of the Gradle property.
+method, which `src/platform/android/jni_onload.cpp` calls). Useful on a machine without kotlinc/r8
+installed at all.
 
-Two more optional `-P`/env-var overrides exist for the same reason `CMakeUserPresets.json` exists
-for the standalone `cmake --preset` flow (see `BUILDING.md`) — machine-local escape hatches that
-never get committed as hardcoded paths:
+One more optional `-P`/env-var override exists for the same reason `CMakeUserPresets.json` exists
+for the standalone `cmake --preset` flow (see `BUILDING.md`) — a machine-local escape hatch that
+never gets committed as a hardcoded path:
 
-- `konativeNdkPath` / `KONATIVE_NDK_PATH` — points AGP directly at an already-installed NDK,
-  bypassing its SDK-manager-based auto-provisioning (which needs both a one-time interactive
-  `sdkmanager --licenses` run AND write access to the SDK's own install directory — fails outright
-  if the SDK lives somewhere admin-only, e.g. under `Program Files`).
 - `konativeGitExecutable` / `KONATIVE_GIT_EXECUTABLE` — `BUILDING.md`'s `-DGIT_EXECUTABLE=...`
   git.cmd-shim workaround. A bare `-DGIT_EXECUTABLE=...` on the `gradle` command line does **not**
   reach the CMake invocation AGP builds internally (that `-D` sets a JVM system property on the
   Gradle daemon, nothing more) — it must go through this property instead.
+
+(`konativeNdkPath` / `KONATIVE_NDK_PATH` — points AGP directly at an already-installed NDK,
+bypassing its SDK-manager-based auto-provisioning, which needs both a one-time interactive
+`sdkmanager --licenses` run AND write access to the SDK's own install directory — fails outright
+if the SDK lives somewhere admin-only, e.g. under `Program Files`.)
 
 ## The on-device verification loop
 
@@ -96,10 +113,11 @@ self-checking-loader design). Check `AndroidRuntime:E`/`ActivityManager:E` for a
 rooted LDPlayer emulator, `adb root_shell` access lets you inspect `/data/data/com.konative.testapp/`
 directly if logcat alone isn't enough to diagnose a failure.
 
-**Verified end to end** (2026-07-17, LDPlayer x86_64 emulator): installed a real APK built by this
-exact Gradle flow, launched it, and confirmed via logcat that `JNI_OnLoad` ran, the embedded dex
-blob passed its SHA-256 self-check, `InMemoryDexClassLoader` loaded a real embedded class, and the
-reflective `install(Application)` handoff executed — `I Konative: KonativeEntryPoint.install()
-called for package=com.konative.testapp`, no crash, clean `ActivityTaskManager: Displayed`. Used a
-hand-built placeholder dex (see `-PkonativeEmbeddedDexPath` above), not the real Compose UI —
-that piece is still open (`ARCHITECTURE.md` §6.6).
+**Verified end to end** (2026-07-18, LDPlayer x86_64 emulator), with the fully automated pipeline —
+no `-PkonativeEmbeddedDexPath` override, no hand-built dex: `./gradlew assembleDebug` with only the
+four toolchain properties above compiled `embedded_kotlin/` via `kotlinc`+r8 at build time,
+installed the resulting APK, launched it, and confirmed via logcat + screenshot that `JNI_OnLoad`
+ran, the embedded dex blob passed its SHA-256 self-check, `KonativeResourceProvider`'s opportunistic
+upgrade succeeded, `KonativeEntryPoint.install(Application)` executed, and the real Jetpack Compose
+UI rendered — the same green-`Box`-plus-white-"Konative"-text output as the original hand-built
+milestone (`ARCHITECTURE.md` §6.6/6.7), with zero manual dex-building steps.

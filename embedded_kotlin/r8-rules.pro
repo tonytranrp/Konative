@@ -33,6 +33,21 @@
 -dontwarn androidx.emoji2.**
 -dontwarn androidx.window.**
 
+# --- androidx.compose.ui.graphics.layer.GraphicsLayerV23 (a pre-API29 hardware-layer compat path
+# inside androidx.compose.ui:ui-graphics) references android.view.RenderNode/HardwareCanvas/
+# DisplayListCanvas - real, HIDDEN platform classes that were never public and don't exist at all
+# in a real, modern SDK stub jar (confirmed via `unzip -l android-36/android.jar`: it ships
+# android.graphics.RenderNode, a DIFFERENT class in a DIFFERENT package, added when this API was
+# made public - the android.view.* names below never existed there). A real, reproduced R8 error
+# (not hypothetical): `--min-api 26` still lets R8's shrinker reach GraphicsLayerV23's V23-only
+# codepath in its static call graph, and R8 treats an unresolvable referenced class as a hard
+# compilation error unless told otherwise - same category as the emoji2/window rules above (a
+# defensively-referenced optional/version-gated path this module's real min-api never executes),
+# not a real missing dependency. ---
+-dontwarn android.view.RenderNode
+-dontwarn android.view.HardwareCanvas
+-dontwarn android.view.DisplayListCanvas
+
 # --- androidx.core.content.res.FontResourcesParserCompat's XML custom-font-family parsing path
 # needs androidx.core.R$styleable (real AAPT2-linked attribute arrays), which this hand-rolled
 # pipeline has no AAPT2 step to generate. Not shimmed (unlike the R$id/R$string tag-key shims in
@@ -77,3 +92,18 @@
 # confirmed via `unzip -l` on the real AAR jar), so keep all of it rather than chase individual
 # missing internals one at a time. ---
 -keep class kotlinx.coroutines.android.** { *; }
+
+# --- androidx.compose.ui.platform.LifecycleRetainedValuesStoreOwner (a ViewModel subclass
+# AndroidComposeView.installLocalRetainedValuesStore() looks up via
+# ViewModelProvider.NewInstanceFactory - Class.getDeclaredConstructor() + newInstance(), the
+# standard AndroidX ViewModel-construction pattern, itself just reflection with no static
+# call-graph reference to `new LifecycleRetainedValuesStoreOwner()` anywhere) - the exact same
+# "reflection-only, invisible to R8's shrinker" shape as the two rules above, caught by this
+# module's own CMake-automation smoke test: a real on-device crash,
+# `java.lang.NoSuchMethodException: androidx.compose.ui.platform.LifecycleRetainedValuesStoreOwner
+# .<init> []`, thrown from AndroidComposeView.onAttachedToWindow() - confirmed via `javap` against
+# the real androidx.compose.ui:ui jar that the source class DOES declare a public no-arg
+# constructor, so this is R8 stripping it, not a real absence. Kept as a whole class (not just the
+# constructor) because its nested RetainedValuesStoreEntry/FrameEndScheduler classes are used
+# internally by its own instance methods once constructed. ---
+-keep class androidx.compose.ui.platform.LifecycleRetainedValuesStoreOwner* { *; }

@@ -372,9 +372,29 @@ Gradle-resolved AndroidX dependency closure, using `embedded_kotlin/r8-rules.pro
 committed file, not scratchpad-only) — this answers the size question below with a real, measured
 number.
 
-**Still open**: only the actual `kotlinc`+Compose-compiler-plugin+`d8`/`r8` CMake pipeline that
-would produce this automatically remains — the recipe itself is now fully validated and
-reproducible by hand, just not yet wired into CMake.
+**The `kotlinc`+Compose-compiler-plugin+`r8` CMake pipeline is now landed**:
+`cmake/modules/KonativeEmbedKotlinDex.cmake`'s `konative_embed_kotlin_dex(<target> SOURCES <kt-
+files> PG_CONF <path> SYMBOL <prefix>)` automates the full hand-validated recipe at build time
+(`KonativeCompileKotlinDex.cmake`, a `cmake -P` driver following the same shape as
+`KonativeGenerateIncbinAsm.cmake`), then hands the resulting `classes.dex` to the existing
+`konative_embed_binary_blob()`. `src/platform/android/CMakeLists.txt` uses this automatically
+unless `KONATIVE_EMBEDDED_DEX_PATH` is set (a manual-override escape hatch, still supported).
+Requires three machine-local toolchain paths (`KONATIVE_KOTLINC`, `KONATIVE_R8`,
+`KONATIVE_ANDROID_JAR`) plus `KONATIVE_KOTLIN_CLASSPATH_DIR` (a pre-resolved dependency-jar
+directory — real Maven resolution from CMake is still not solved, see below), set the same way
+`ANDROID_NDK_HOME` already is (`CMakeUserPresets.json`, machine-local, gitignored).
+**Verified end-to-end, not just "the script exits 0"**: a real `cmake --build`, and separately a
+real `./gradlew assembleDebug` (via `testapp/`'s own `externalNativeBuild`, with the new toolchain
+paths forwarded as Gradle properties), both produced a working `.so`, installed and rendered
+correctly on the rooted LDPlayer x86_64 emulator — the identical green-Box-plus-"Konative"-text
+output as the original hand-built milestone.
+**Automating the pipeline surfaced one genuinely new reflection-stripped-by-R8 bug the hand-run
+recipe's specific classpath snapshot never happened to hit**: `androidx.compose.ui.platform.
+LifecycleRetainedValuesStoreOwner` (constructed via `ViewModelProvider.NewInstanceFactory`
+reflection, same "invisible to R8's shrinker" shape as `KonativeEntryPoint`/
+`KonativeResourceProvider`/`kotlinx.coroutines.android.**`) — fixed with one more `-keep` rule in
+`embedded_kotlin/r8-rules.pro`, confirmed via `javap` against the real dependency jar that the
+class does declare the no-arg constructor R8 was stripping.
 
 - **The "one `.kt` file in `testapp/`" rule does not reach the embedded dex.** Two independent
   build pipelines exist: `testapp/`'s own Gradle/AGP pass compiles exactly `MainActivity.kt`;
@@ -415,7 +435,8 @@ reproducible by hand, just not yet wired into CMake.
   resource-ID constants those libraries need, e.g. for `View.setTag()`-based owner attachment)
   don't exist. Worked around for now with hand-written stand-ins
   (`embedded_kotlin/r_shim/`, see that folder's own README) — not a permanent design, a real
-  AAPT2-based fix is needed in the eventual CMake automation.
+  AAPT2-based fix is still needed; the now-landed CMake automation (below) does not add one, it
+  just automates the same recipe `r_shim/` was already validated against.
 
 ### 6.7 Status: what's landed vs. still open, as of this rewrite
 
@@ -427,11 +448,11 @@ reproducible by hand, just not yet wired into CMake.
 | `JNI_OnLoad` entry point (`src/platform/android/jni_onload.cpp`) | **Landed** |
 | **Full `JNI_OnLoad` → `verify_blob()` → `load_class_from_dex()` → reflective `install(Application)` chain** | **Verified end-to-end on real hardware** with both a placeholder entry point (real logcat proof) and the real Compose entry point (real screenshotted rendering) |
 | `KonativeResourceProvider` (`embedded_kotlin/`) — resource lookup for a dex-loaded `ClassLoader` | **Landed, verified on real hardware** — see §6.6 |
-| `kotlinc`+Compose-compiler-plugin+`d8`/`r8` CMake pipeline | Reproducible by hand (§6.6), not yet automated into CMake |
+| `kotlinc`+Compose-compiler-plugin+`r8` CMake pipeline (`KonativeEmbedKotlinDex.cmake`) | **Landed and verified** — real `cmake --build` and real `./gradlew assembleDebug`, both rendering correctly on-device (§6.6) |
 | Embedded Kotlin+Compose source tree (`embedded_kotlin/KonativeEntryPoint`) | **Landed and rendering on real hardware** — real screenshot proof (§6.6), no known blockers remaining for this proof-of-concept's scope |
 | AAPT2 resource linking for the embedded dex (`R$id`/`R$string` for AndroidX deps) | **Not implemented** — hand-shimmed as a stopgap (`embedded_kotlin/r_shim/`), not a real fix |
 | `src/platform/android/{android_main,activity_bridge,looper_pump}.cpp` + `include/konative/platform/android/` | **Removed** (superseded by `jni_onload.cpp` + `include/konative/jni/`) |
-| `testapp/`'s Gradle build (`app/build.gradle.kts`) | **Landed** — drives the real root `CMakeLists.txt` for `konative_app_native` end to end (CPM fetch, Android NDK cross-compile, `.incbin` embed, dex packaging), gated behind `-PkonativeEmbeddedDexPath=<path>` (see `testapp/README.md`) since the automated dex pipeline isn't wired up yet |
+| `testapp/`'s Gradle build (`app/build.gradle.kts`) | **Landed** — drives the real root `CMakeLists.txt` for `konative_app_native` end to end (CPM fetch, Android NDK cross-compile, automated Kotlin+Compose dex build, `.incbin` embed, dex packaging); `-PkonativeEmbeddedDexPath=<path>` (see `testapp/README.md`) remains available as a manual override, no longer required |
 | Kotlin/Native (`native/src/Renderer.kt`, EGL/GLES rendering) | **Fully superseded for rendering** — kept only as a historical record; do not extend |
 
 ---

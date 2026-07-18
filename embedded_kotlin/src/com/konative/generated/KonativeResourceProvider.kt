@@ -13,9 +13,14 @@ import java.util.Enumeration
 // resource backing at all, so ClassLoader.getResource()/getResourceAsStream()/getResources()
 // always return null/empty/nothing for any class loaded this way - which breaks any library
 // relying on META-INF/services/*-based java.util.ServiceLoader discovery. kotlinx-coroutines'
-// Main-dispatcher discovery (both its "fast" path and the plain ServiceLoader fallback -
-// confirmed by decompiling kotlinx.coroutines.internal.MainDispatcherLoader directly) is the
-// concrete, reproduced case that blocked Compose from rendering; there may be others.
+// Main-dispatcher discovery is the concrete, reproduced case that blocked Compose from rendering;
+// there may be others. Only the plain java.util.ServiceLoader-style fallback path actually needs
+// this resource lookup - a later, independent verification pass decompiled
+// kotlinx.coroutines.internal.FastServiceLoader further than the original diagnosis had and found
+// that on a real Android device, the "fast" path kotlinx-coroutines actually takes uses a
+// hardcoded Class.forName(...) lookup instead, needing no resources at all (see r8-rules.pro's own
+// kotlinx.coroutines.android.** keep rule for the separate, real problem that path DOES have -
+// R8 shrinking the looked-up class away entirely).
 //
 // NOT an InMemoryDexClassLoader subclass - dalvik.system.InMemoryDexClassLoader is a final class
 // (a real, compile-time-verified constraint, not a style choice - an earlier draft tried

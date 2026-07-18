@@ -27,6 +27,7 @@ if(ANDROID)
   include(KonativeAndroidToolchain)
   include(KonativeKotlinNative)
   include(KonativeEmbedBlob)
+  include(KonativeEmbedKotlinDex)
   # Required for cmake/modules/KonativeEmbedBlob.cmake's .incbin-based blob embedder - the NDK's
   # own android.toolchain.cmake sets up no ASM compiler variables at all (verified directly
   # against its source, research/incbin_embedding_research.md section 3), and calling
