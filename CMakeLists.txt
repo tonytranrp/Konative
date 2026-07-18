@@ -26,6 +26,13 @@ include(KonativeWarnings)
 if(ANDROID)
   include(KonativeAndroidToolchain)
   include(KonativeKotlinNative)
+  # Required for cmake/modules/KonativeEmbedBlob.cmake's .incbin-based blob embedder - the NDK's
+  # own android.toolchain.cmake sets up no ASM compiler variables at all (verified directly
+  # against its source, research/incbin_embedding_research.md section 3), and calling
+  # enable_language(ASM) for the first time from inside a CMake function (rather than here, a
+  # top-level CMakeLists.txt) fails outright - see KonativeEmbedBlob.cmake's own top comment for
+  # the real, reproduced failure this works around.
+  enable_language(ASM)
 endif()
 include(KonativeDependencies)
 

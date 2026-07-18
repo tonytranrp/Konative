@@ -13,6 +13,23 @@
 #   extern const unsigned char <prefix>_end[];
 #   extern const uint64_t      <prefix>_size;   // both target ABIs are LP64
 #
+# PRECONDITION: the including project must already have ASM enabled
+# (`enable_language(ASM)` or `project(... LANGUAGES ... ASM)`) before calling
+# this function - Konative's own top-level CMakeLists.txt does this inside its
+# `if(ANDROID)` block. This function deliberately does NOT call
+# enable_language(ASM) itself: a real verification pass proved that calling it
+# for the FIRST time from inside a CMake function (as opposed to a top-level
+# CMakeLists.txt) fails outright - "Missing variable is:
+# CMAKE_ASM_COMPILE_OBJECT" - on this project's actual toolchain (NDK r28 +
+# Ninja + CMake 4.3.2). An earlier version of this module called it here
+# anyway on the strength of an untested "enable_language() is idempotent, safe
+# to call from a function" assumption; a scratchpad test that seemed to
+# confirm it working had accidentally masked the bug with its own redundant
+# top-level enable_language(ASM) call, and only testing the bare
+# function-only-call shape (matching how this repo actually uses it) surfaced
+# the real failure. Failing clearly at configure time via the check below
+# beats silently depending on call order.
+#
 # VERIFY_SHA256 (optional): also computes the blob's real SHA-256 at BUILD time
 # (CMake's own builtin file(SHA256 ...), no extra dependency needed for this
 # half) and embeds it as a 32-byte array:
@@ -41,11 +58,17 @@ function(konative_embed_binary_blob TARGET_NAME)
       "add_library()/add_executable() before this function")
   endif()
 
-  # The NDK's own android.toolchain.cmake sets up NO ASM compiler variables at
-  # all (verified directly against its source) - every consumer must enable
-  # this itself. enable_language() is idempotent - safe to call from a
-  # function, safe if called more than once across multiple blobs.
-  enable_language(ASM)
+  # See this file's own top comment: ASM must already be enabled by the
+  # including project (Konative's top-level CMakeLists.txt does this) -
+  # enable_language(ASM) is deliberately NOT called from here.
+  if(NOT CMAKE_ASM_COMPILER)
+    message(FATAL_ERROR
+      "konative_embed_binary_blob(${TARGET_NAME}): ASM is not enabled for "
+      "this project. Call enable_language(ASM) (or add ASM to your "
+      "project(... LANGUAGES ...) call) before using this function - see "
+      "KonativeEmbedBlob.cmake's top comment for why this isn't done "
+      "automatically here.")
+  endif()
 
   get_filename_component(ARG_BLOB "${ARG_BLOB}" ABSOLUTE)
   # Always forward-slash, even though we're on a Windows host generating for
