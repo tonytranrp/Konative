@@ -117,6 +117,24 @@ CPMAddPackage(
           "LIBCORO_BUILD_EXAMPLES OFF"
 )
 
+# --- PicoSHA2: single-header SHA-256, for the self-checking embedded-blob verifier
+# (include/konative/embed/checked_blob.hpp) - runtime counterpart to
+# konative_embed_binary_blob()'s VERIFY_SHA256 option (cmake/modules/KonativeEmbedBlob.cmake),
+# which computes the expected hash at build time via CMake's own builtin file(SHA256 ...). Tag
+# verified via `git ls-remote --tags` per this file's own hard rule (ARCHITECTURE.md section 4).
+# DOWNLOAD_ONLY: it's one header, no CMakeLists.txt of its own to speak of.
+CPMAddPackage(
+  NAME PicoSHA2
+  GITHUB_REPOSITORY okdshin/PicoSHA2
+  GIT_TAG v1.0.1
+  DOWNLOAD_ONLY YES
+)
+if(PicoSHA2_ADDED AND NOT TARGET PicoSHA2)
+  add_library(PicoSHA2 INTERFACE)
+  add_library(PicoSHA2::PicoSHA2 ALIAS PicoSHA2)
+  target_include_directories(PicoSHA2 SYSTEM INTERFACE "${PicoSHA2_SOURCE_DIR}")
+endif()
+
 # --- Glaze: macro-free reflection-driven JSON, for config/hot-reload ---
 # v3.5.4 never existed (verified: `git ls-remote --tags` against the real repo) - the actual
 # tag history jumps from the 3.x-2.x lines this project's own earlier research cited straight to

@@ -1,4 +1,4 @@
-# konative_embed_binary_blob(<target> BLOB <path> SYMBOL <prefix>)
+# konative_embed_binary_blob(<target> BLOB <path> SYMBOL <prefix> [VERIFY_SHA256])
 #
 # Embeds an arbitrary binary file as linked read-only data inside <target> via
 # a GAS `.incbin` directive, assembled by the same NDK Clang/LLD invocation as
@@ -12,11 +12,23 @@
 #   extern const unsigned char <prefix>_start[];
 #   extern const unsigned char <prefix>_end[];
 #   extern const uint64_t      <prefix>_size;   // both target ABIs are LP64
+#
+# VERIFY_SHA256 (optional): also computes the blob's real SHA-256 at BUILD time
+# (CMake's own builtin file(SHA256 ...), no extra dependency needed for this
+# half) and embeds it as a 32-byte array:
+#   extern const unsigned char <prefix>_expected_sha256[32];
+# The self-checking loader (include/konative/embed/checked_blob.hpp) re-hashes
+# the actual <prefix>_start.._end bytes at RUNTIME (via PicoSHA2) and compares
+# against this constant before trusting the blob - turns a corrupted/mismatched
+# build artifact into a clear, actionable startup error instead of a mysterious
+# crash deep inside a classloader. This is a build-integrity self-check (catches
+# "the build pipeline embedded the wrong/truncated bytes"), not a tamper/security
+# boundary - the hash is linked in cleartext right next to the data it checks.
 
 include_guard(GLOBAL)
 
 function(konative_embed_binary_blob TARGET_NAME)
-  cmake_parse_arguments(ARG "" "BLOB;SYMBOL" "" ${ARGN})
+  cmake_parse_arguments(ARG "VERIFY_SHA256" "BLOB;SYMBOL" "" ${ARGN})
   if(NOT ARG_BLOB)
     message(FATAL_ERROR "konative_embed_binary_blob(${TARGET_NAME}): BLOB <path> is required")
   endif()
@@ -59,6 +71,7 @@ function(konative_embed_binary_blob TARGET_NAME)
             "-DKONATIVE_BLOB_PATH=${ARG_BLOB}"
             "-DKONATIVE_BLOB_SYMBOL=${ARG_SYMBOL}"
             "-DKONATIVE_OUT_FILE=${_out_s}"
+            "-DKONATIVE_VERIFY_SHA256=${ARG_VERIFY_SHA256}"
             -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/KonativeGenerateIncbinAsm.cmake"
     DEPENDS "${ARG_BLOB}" "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/KonativeGenerateIncbinAsm.cmake"
     COMMENT "konative: regenerating ${ARG_SYMBOL}_blob.S (.incbin ${ARG_BLOB})"

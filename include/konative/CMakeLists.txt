@@ -9,6 +9,7 @@ add_subdirectory(ecs)
 add_subdirectory(events)
 add_subdirectory(scheduling)
 add_subdirectory(interop)
+add_subdirectory(embed)
 add_subdirectory(app)
 if(ANDROID)
   add_subdirectory(platform/android)
@@ -24,6 +25,7 @@ target_link_libraries(konative INTERFACE
   konative::events
   konative::scheduling
   konative::interop
+  konative::embed
   konative::app
   konative::render
 )

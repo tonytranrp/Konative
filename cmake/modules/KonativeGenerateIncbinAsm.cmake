@@ -8,6 +8,27 @@ foreach(_required KONATIVE_BLOB_PATH KONATIVE_BLOB_SYMBOL KONATIVE_OUT_FILE)
   endif()
 endforeach()
 
+# Optional: emit a <prefix>_expected_sha256[32] alongside the blob, computed fresh from the same
+# real bytes every time this script runs (build time, same trigger as the .incbin regeneration
+# itself - see KonativeEmbedBlob.cmake's VERIFY_SHA256 doc comment). CMake's own builtin file(SHA256
+# ...) needs no extra dependency for this half; only the RUNTIME re-hash (checked_blob.hpp) needs
+# PicoSHA2.
+set(_sha256_asm "")
+if(KONATIVE_VERIFY_SHA256)
+  file(SHA256 "${KONATIVE_BLOB_PATH}" _hash_hex)
+  set(_byte_lines "")
+  foreach(_i RANGE 0 62 2)
+    string(SUBSTRING "${_hash_hex}" ${_i} 2 _byte_hex)
+    string(APPEND _byte_lines "    .byte 0x${_byte_hex}\n")
+  endforeach()
+  set(_sha256_asm "\
+    .balign 8
+    .global ${KONATIVE_BLOB_SYMBOL}_expected_sha256
+${KONATIVE_BLOB_SYMBOL}_expected_sha256:
+${_byte_lines}\
+")
+endif()
+
 # No `.type sym, @object`/`%object` anywhere below - GNU as/LLVM's integrated
 # assembler use `@` on most targets but ARM/AArch64 conventionally want `%`
 # instead (`@` is that target's comment leader) - three independently
@@ -32,6 +53,7 @@ ${KONATIVE_BLOB_SYMBOL}_end:
 ${KONATIVE_BLOB_SYMBOL}_size:
     .quad ${KONATIVE_BLOB_SYMBOL}_end - ${KONATIVE_BLOB_SYMBOL}_start
 
+${_sha256_asm}\
     /* Hand-written .S objects skip the compiler's automatic PT_GNU_STACK
        marking - omitting this can make some lld configurations warn/error
        \"missing .note.GNU-stack section implies executable stack\". */
