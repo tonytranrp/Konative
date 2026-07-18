@@ -37,6 +37,29 @@ import android.util.Log
 // reassigns these IDs, KONATIVE_STRING_OVERRIDE_SELF_CHECK below will fail loudly at every app launch
 // rather than silently serving the wrong string - see installKonativeResourceStringOverrides()'s own
 // self-check call.
+//
+// Two further, real, KNOWN, ACCEPTED limitations of this scoped approach (found by a verify-subagent
+// reviewing this fix, independently re-confirmed - not fixed here, since fixing either properly means
+// building the general ResourcesLoader mechanism embedded_kotlin/README.md already designs for this
+// exact reason):
+// 1. **No localization** - the real AndroidX AAR ships real translations for both strings (confirmed:
+//    values-fr/values-de/values-ja/etc. all exist in the real res/ this project's own aapt2-aars
+//    directory already has) but this override always returns the hardcoded English literal regardless
+//    of device locale. Before this fix EVERY locale crashed; after it, every locale gets English text
+//    instead of a correctly localized one - a real, net improvement, but a silent trade-off worth
+//    naming rather than leaving implicit.
+// 2. **The manually-constructed Resources(AssetManager, DisplayMetrics, Configuration) instance is
+//    invisible to ResourcesManager's live config-update propagation** (confirmed via real AOSP
+//    ResourcesManager.java source - it maintains its own registries specifically because directly-
+//    `new`'d Resources instances are historically orphaned from configuration-change updates; this
+//    3-arg constructor is officially deprecated for exactly this reason, though it remains fully
+//    functional, real, public SDK surface with no hidden-API restriction). Currently INERT, not
+//    actually exercised: MainActivity declares no android:configChanges, so a real config change
+//    destroys+recreates the Activity rather than live-updating it, and KonativeEntryPoint.kt's own
+//    pre-existing `if (owner != null) return` guard means a recreated Activity never re-enters this
+//    code path at all (gets no ComposeView, wrapped or otherwise) - a separate, pre-existing
+//    limitation, not caused by this fix, but the reason this risk has zero blast radius today. Would
+//    need revisiting together with real Activity-recreation support, not in isolation.
 private const val TAB_STRING_ID = 0x7f08001b
 private const val SWITCH_ROLE_STRING_ID = 0x7f08001a
 private val KNOWN_BROKEN_STRINGS = mapOf(
@@ -74,12 +97,19 @@ fun konativeResourceStringOverrideSelfCheck(wrappedContext: Context) {
     for ((id, expected) in KNOWN_BROKEN_STRINGS) {
         val actual = runCatching { wrappedContext.resources.getString(id) }
         if (actual.getOrNull() != expected) {
+            // Two real, distinct root causes land here (detection is correct for both - only the
+            // likely-cause guess in this message can't distinguish them): either the hardcoded ID in
+            // KonativeResourceStringOverride.kt is stale against a newer AAPT2 link (regenerate from a
+            // fresh KonativeCompileKotlinDex.cmake Step 1.5 build), or wrapContextForResourceStringOverride()
+            // was never actually applied to the Context this self-check was called with (the override
+            // never got a chance to run at all, so the real, still-broken Resources.getString() call
+            // threw the original NotFoundException instead).
             Log.e(
                 "Konative",
                 "konativeResourceStringOverrideSelfCheck: resource string override for id=0x${id.toString(16)} " +
-                    "did not return the expected value (expected=\"$expected\", got=$actual) - the hardcoded " +
-                    "IDs in KonativeResourceStringOverride.kt are likely stale against a newer AAPT2 link; " +
-                    "regenerate them from a fresh KonativeCompileKotlinDex.cmake Step 1.5 build.",
+                    "did not return the expected value (expected=\"$expected\", got=$actual) - either the " +
+                    "hardcoded ID is stale against a newer AAPT2 link (regenerate from a fresh Step 1.5 " +
+                    "build), or wrapContextForResourceStringOverride() was never applied to this Context.",
             )
         }
     }
