@@ -9,8 +9,8 @@ This document does not re-litigate that conclusion — it answers the five concr
 questions research.md left open, verifies every claim against a primary source or real code (not
 memory or a hypothetical Stack Overflow answer), and ends with ready-to-paste CMake.
 
-Context this builds on, already read in full: `GameHub/cmake/scripts/bin_to_c_array.py` (48 lines,
-the current C-array approach), `GameHub/cmake/modules/JvmDex.cmake` (237 lines, the
+Context this builds on, already read in full: `GameHub/cmake/scripts/bin_to_c_array.py` (47 lines,
+the current C-array approach), `GameHub/cmake/modules/JvmDex.cmake` (236 lines, the
 `kotlinc`/`d8`-to-blob pipeline this new mechanism plugs into as a drop-in replacement for the
 final embedding step only), and `research/research.md` sections 1–3 (dex-embedding runtime
 mechanism, corrosion-style CMake module architecture, NDK CMake toolchain mechanics).
@@ -106,9 +106,9 @@ something it reads at compile-time changes" — which is a different, narrower C
 - **`OBJECT_DEPENDS` — correct in spirit, but generator-limited.** Per the
   [official CMake `OBJECT_DEPENDS` docs](https://cmake.org/cmake/help/latest/prop_sf/OBJECT_DEPENDS.html),
   it is real and does exactly what's needed semantically (forces recompilation of an object file
-  when a file the compiler doesn't itself know to depend on changes) — the docs' "largely obsolete"
-  framing is specifically about its *original* use (generated C/C++ headers, now handled by
-  automatic dependency scanning), which doesn't apply here: no C/C++/ASM dependency scanner looks
+  when a file the compiler doesn't itself know to depend on changes) — the docs' "no longer
+  necessary" framing is specifically about its *original* use (generated C/C++ headers, now handled
+  by automatic dependency scanning), which doesn't apply here: no C/C++/ASM dependency scanner looks
   inside a `.S` file for `.incbin "..."` references, so this exact use case is still exactly what
   `OBJECT_DEPENDS` is for. **The catch, stated explicitly in the same docs**: "Visual Studio
   Generators and the Xcode generator cannot implement such compilation dependencies" — silently

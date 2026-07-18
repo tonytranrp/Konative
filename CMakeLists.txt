@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.23)
 
 project(Konative
   VERSION 0.1.0
-  DESCRIPTION "Kotlin/Native + C++ fused into one native Android .so — no JVM, no dex, no JNI"
+  DESCRIPTION "Kotlin (Jetpack Compose) + C++ fused into one native Android .so via embedded-dex, corrosion-style CMake tooling"
   LANGUAGES CXX C
 )
 
