@@ -14,10 +14,16 @@
 > `include/konative/embed/checked_blob.hpp`'s SHA-256 self-check (§6.5), the `JNI_OnLoad` entry point
 > and dex-loader (§6.4), and the `kotlinc`+Compose-compiler-plugin+**`r8`** CMake pipeline
 > (`KonativeEmbedKotlinDex.cmake`, §6.6) — real Jetpack Compose UI renders on-device, zero
-> OpenGL/EGL/Vulkan anywhere. §6.7's status table states exactly what's landed vs. the remaining
-> lower-priority open items (AAPT2 resource linking is still a hand-shimmed stopgap; an R8 optimizer
-> bug is worked around, not root-caused). See the `project-konative-autonomous-loop` memory entry for
-> the full iteration-by-iteration history.
+> OpenGL/EGL/Vulkan anywhere. AAPT2 resource linking has since landed too (real `aapt2 compile`+`link`
+> against the real dependency AARs, replacing the old hand-shimmed `embedded_kotlin/r_shim/`
+> stopgap entirely — §6.6). The R8 `fill$default` optimizer bug is now root-caused and understood
+> (§6.6, `embedded_kotlin/r8-rules.pro`) — `-dontoptimize` remains the fix, confirmed the only one
+> that works on this toolchain after an exhaustive, empirical search for a narrower alternative.
+> §6.7's status table states exactly what's landed vs. what's still genuinely open (a separate,
+> deeper runtime gap around `Resources.getString()`-backed resource fields, needing a real decision
+> about `testapp/`'s own scope — not a stopgap needing more engineering, a decision needing the
+> project owner). See the `project-konative-autonomous-loop` memory entry for the full
+> iteration-by-iteration history.
 
 This document is the synthesized design for Konative: a CMake/C++ framework combining Kotlin and
 C++ into **one native Android `.so`** — rendering and app logic together. Everything below is

@@ -94,7 +94,11 @@ order they were hit — each one was a real, reproduced on-device failure, not a
 4. A real, reproduced-twice `NoSuchMethodError` on `kotlin.collections.ArraysKt.fill$default`
    inside `androidx.collection.MutableScatterMap`, surviving a `kotlin-stdlib` version swap
    unchanged — an R8 optimizer bug/mismatch with this specific call shape, worked around with
-   `-dontoptimize` (not root-caused further; see `r8-rules.pro`).
+   `-dontoptimize`. **Root-caused 2026-07-18** (see `r8-rules.pro`'s own comment for the full
+   writeup) — R8 materializes a signature-stripped copy of the method directly onto a Kotlin
+   multi-file-facade class since `kotlin-stdlib.jar` is fed to R8 as full program input, not
+   `--lib`; four narrower fix candidates were tried and empirically failed, `-dontoptimize`
+   confirmed as the only working fix on this toolchain.
 5. **The `Dispatchers.Main` blocker** (previously the last known blocker, now solved) — two
    distinct causes, both real, both required for the fix:
    - `dalvik.system.InMemoryDexClassLoader` loads bytecode from a raw byte buffer with no JAR/ZIP
@@ -122,8 +126,10 @@ order they were hit — each one was a real, reproduced on-device failure, not a
      were required together for the confirmed-working combination.
 
 No known blockers remain for this proof-of-concept's current scope (real Compose UI renders
-correctly, see below). Real, still-open, lower-priority item: the R8 optimizer bug in item 4 above
-(worked around, not root-caused). The CMake automation for this whole pipeline has landed
+correctly, see below). The R8 optimizer bug in item 4 above is now root-caused and understood (see
+`r8-rules.pro`) — `-dontoptimize` remains the fix, confirmed the only one that works on this
+toolchain after an exhaustive search for a narrower alternative; not expected to need further work
+without a genuinely different R8 release to test against. The CMake automation for this whole pipeline has landed
 (`cmake/modules/KonativeEmbedKotlinDex.cmake`) — verified via both a direct `cmake --build` and a
 real `./gradlew assembleDebug`, both rendering correctly on-device; it surfaced one more
 reflection-stripped-by-R8 class (`androidx.compose.ui.platform.LifecycleRetainedValuesStoreOwner`,
