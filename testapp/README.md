@@ -182,10 +182,9 @@ build, not just a configured intent. Installed and launched on BOTH devices from
 This closes the previously-open gap (a `./gradlew assembleDebug` run specifically exercising all
 seven properties together, and any real physical-hardware run at all, had not been done before) with
 zero regressions found - the Gradle-driven and standalone-CMake-driven paths do share the same
-underlying CMake modules and now both have real, independent, on-device proof.
-
-**Two more real, one-time-setup gotchas found while getting this far** (beyond the SDK-location and
-`konativeNdkPath`-on-`clean` notes above, both already folded into the relevant sections): none
-specific to Gradle 9.4.1 itself - both are ordinary Android/Gradle project setup requirements this
-project's own docs simply hadn't needed to state yet, since nobody had run a real `gradlew` build
-against a truly clean `testapp/` checkout before this point.
+underlying CMake modules and now both have real, independent, on-device proof. The two real,
+one-time-setup gotchas hit while getting this far (needing a real `local.properties`/`ANDROID_HOME`,
+and `konativeNdkPath` being required even for a bare `clean`) are both folded into "Building and
+installing" above - neither is specific to Gradle 9.4.1 itself, both are ordinary Android/Gradle
+project setup requirements this project's own docs simply hadn't needed to state yet, since nobody
+had run a real `gradlew` build against a truly clean `testapp/` checkout before this point.
