@@ -356,37 +356,51 @@ verification history including one real bug caught and fixed):
   self-check, catching "the build pipeline embedded the wrong/truncated bytes," not a tamper/
   security boundary** — the expected hash sits in cleartext right next to the data it verifies.
 
-### 6.6 The embedded dex: what's still open
+### 6.6 The embedded dex: what's landed and what's still open
 
-Not yet built: the actual `kotlinc`+Compose-compiler-plugin+`d8` CMake pipeline that produces the
-real dex blob §6.5 embeds, and the real Kotlin source it compiles. Concrete, ready-to-implement
-design (`research/jni_activity_bootstrap_research.md` §§2–3, validated end-to-end already once via
-a manual scratchpad spike — real Maven coordinates, real `kotlinc -Xcompiler-plugin=<bundled
-plugin>` invocation, real `javap`-verified bytecode, real `d8` output):
+**Landed**: the real Kotlin source (`embedded_kotlin/`) — `KonativeEntryPoint`/`ComposeHostOwner`/
+a trivial `@Composable` proof UI, implementing `research/jni_activity_bootstrap_research.md` §5.2's
+design directly (two real bugs found and fixed by actually compiling it — see
+`embedded_kotlin/README.md`'s Status section). Compiles cleanly and R8-shrinks to a single
+~1.2–2.4MB `classes.dex` against the real, Gradle-resolved AndroidX dependency closure — this
+answers the size question below with a real, measured number.
+
+**Still open**: the actual `kotlinc`+Compose-compiler-plugin+`d8`/`r8` CMake pipeline that would
+produce this automatically (currently a hand-run scratchpad recipe, reproducible but not automated)
+— and, more importantly, **a real, precisely-diagnosed architectural blocker before this can render
+on-device at all**, found by actually trying:
 
 - **The "one `.kt` file in `testapp/`" rule does not reach the embedded dex.** Two independent
   build pipelines exist: `testapp/`'s own Gradle/AGP pass compiles exactly `MainActivity.kt`;
-  Konative's own CMake-driven pipeline compiles a separate Kotlin source tree (outside `testapp/`
-  entirely) into the dex blob that gets embedded as opaque bytes in the `.so` — `testapp/`'s build
-  never sees those `.kt` files at all.
-- The embedded dex must bundle `compose-runtime`/`compose-ui`/`lifecycle-runtime`/
-  `lifecycle-viewmodel`/`savedstate` jars (extracted from their AARs) on its own classpath, unlike
-  `GameHub`'s simpler Dialog-based dex blobs — Compose is never part of the Android OS image the
-  way plain `View`/`Dialog`/`WindowManager` are. **Real open risk, not glossed over**: this very
-  likely pushes the unshrunk blob size well past `research/research.md` §8's already-cited
-  "~2.5MB for a near-trivial Kotlin object" — genuinely unmeasured as of this rewrite.
+  Konative's own CMake-driven pipeline compiles `embedded_kotlin/`'s separate Kotlin source tree
+  into the dex blob that gets embedded as opaque bytes in the `.so` — `testapp/`'s build never
+  sees those `.kt` files at all.
+- **Embedded-blob size, previously flagged as unmeasured, is now real and measured**: a naively
+  `d8`-dexed full Compose+lifecycle+savedstate+coroutines runtime (no Material3 — see
+  `embedded_kotlin/README.md`'s hard rule on why) is **~20MB and splits into 2 dex files**
+  (Konative's current `load_class_from_dex()` only accepts one dex buffer). R8-shrunk (dead-code
+  removal only — obfuscation and even some optimization passes had to be disabled, see
+  `embedded_kotlin/README.md`), it fits in a **single ~1.2–2.4MB dex** comfortably.
+- **A real, on-device-reproduced blocker, not yet solved**: `ComposeView` attachment
+  unconditionally constructs a `FontFamilyResolver`, which touches `kotlinx.coroutines.Dispatchers
+  .Main`. Both of `kotlinx-coroutines`'s Main-dispatcher-discovery paths need classloader
+  **resource** lookup (`META-INF/services/...`), which `dalvik.system.InMemoryDexClassLoader`
+  cannot provide — it loads bytecode from a raw byte buffer with no JAR/ZIP resource backing at
+  all, regardless of `r8` settings. Real crash: `java.lang.IllegalStateException: Module with the
+  Main dispatcher is missing`. See `embedded_kotlin/README.md`'s Status section for the full
+  diagnosis and the two candidate real fixes (extend the loader to also serve resource lookups, or
+  avoid `ServiceLoader`-dependent libraries in the embedded module — the former is the
+  architecturally honest fix, matching what a real APK's own classloader already provides).
 - Real, working reflection precedent for the dex-loading mechanics themselves (steps between §6.4's
   step 1 and step 3): `GameHub/libs/jni/src/dex_loader.cpp`'s already-proven
   `getClassLoader()`→`NewDirectByteBuffer`→`InMemoryDexClassLoader`→`loadClass()`-via-reflection
-  sequence (`env->FindClass()` can't see dex-loaded classes since it resolves relative to the
-  *calling* native method's own class, which doesn't apply to a call that didn't originate from
-  Java) — port this into Konative's own `Result<T,E>`-based style, gated on `verify_blob()`
-  succeeding first.
-- The Kotlin-side sketch (`Application.ActivityLifecycleCallbacks` fabricating a
-  `LifecycleOwner`/`ViewModelStoreOwner`/`SavedStateRegistryOwner` holder, wiring a `ComposeView`
-  via `setViewTreeLifecycleOwner`/etc., calling `activity.setContentView`) is fully written out in
-  `research/jni_activity_bootstrap_research.md` §5.2 — implement against that directly rather than
-  re-deriving it.
+  sequence, already ported into `include/konative/jni/dex_loader.hpp` (§6.7).
+- **A second, real gap the hand-rolled pipeline surfaced**: this pipeline has no AAPT2
+  resource-linking step, so several AndroidX libraries' own `R$id`/`R$string` classes (real
+  resource-ID constants those libraries need, e.g. for `View.setTag()`-based owner attachment)
+  don't exist. Worked around for now with hand-written stand-ins
+  (`embedded_kotlin/r_shim/`, see that folder's own README) — not a permanent design, a real
+  AAPT2-based fix is needed in the eventual CMake automation.
 
 ### 6.7 Status: what's landed vs. still open, as of this rewrite
 
@@ -397,8 +411,9 @@ plugin>` invocation, real `javap`-verified bytecode, real `d8` output):
 | Dex-loader (`InMemoryDexClassLoader` construction, `include/konative/jni/`) | **Landed, ported from `GameHub`** |
 | `JNI_OnLoad` entry point (`src/platform/android/jni_onload.cpp`) | **Landed** |
 | **Full `JNI_OnLoad` → `verify_blob()` → `load_class_from_dex()` → reflective `install(Application)` chain** | **Verified end-to-end on real hardware** (rooted LDPlayer x86_64 emulator, real installed APK, real logcat proof — `I Konative: KonativeEntryPoint.install() called for package=com.konative.testapp`, no crash, clean `ActivityTaskManager: Displayed`). Used a hand-built placeholder `classes.dex` (a real `com.konative.generated.KonativeEntryPoint` with a `@JvmStatic install(Application)` that just logs) since the automated Compose pipeline below doesn't exist yet — this proves the *mechanism*, not the eventual Compose UI. |
-| `kotlinc`+Compose-compiler-plugin+`d8` CMake pipeline | Designed (§6.6), validated manually once via scratchpad spike, not yet automated |
-| Embedded Kotlin+Compose source tree (the real `KonativeEntryPoint` that builds a `ComposeView`) | Designed (§6.6/§6.4 step 3), not yet written — the placeholder above only proves the loader mechanism, not Compose itself |
+| `kotlinc`+Compose-compiler-plugin+`d8`/`r8` CMake pipeline | Reproducible by hand (§6.6), not yet automated into CMake |
+| Embedded Kotlin+Compose source tree (`embedded_kotlin/KonativeEntryPoint`) | **Landed, compiles clean, R8-shrinks to a single ~1.2–2.4MB dex** — **blocked on-device** by the `kotlinx-coroutines`/`ServiceLoader`/`InMemoryDexClassLoader` resource-lookup gap (§6.6) before it can actually render; the placeholder from the row above is still what's verified end-to-end |
+| AAPT2 resource linking for the embedded dex (`R$id`/`R$string` for AndroidX deps) | **Not implemented** — hand-shimmed as a stopgap (`embedded_kotlin/r_shim/`), not a real fix |
 | `src/platform/android/{android_main,activity_bridge,looper_pump}.cpp` + `include/konative/platform/android/` | **Removed** (superseded by `jni_onload.cpp` + `include/konative/jni/`) |
 | `testapp/`'s Gradle build (`app/build.gradle.kts`) | **Landed** — drives the real root `CMakeLists.txt` for `konative_app_native` end to end (CPM fetch, Android NDK cross-compile, `.incbin` embed, dex packaging), gated behind `-PkonativeEmbeddedDexPath=<path>` (see `testapp/README.md`) since the automated dex pipeline isn't wired up yet |
 | Kotlin/Native (`native/src/Renderer.kt`, EGL/GLES rendering) | **Fully superseded for rendering** — kept only as a historical record; do not extend |
