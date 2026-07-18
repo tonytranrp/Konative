@@ -42,7 +42,13 @@ object KonativeEntryPoint {
                 owner = ComposeHostOwner().apply { performRestore(savedInstanceState) }
                 owner!!.registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
 
-                val composeView = ComposeView(activity).apply {
+                // See KonativeResourceStringOverride.kt's own top comment for the real, live bug
+                // this works around and why wrapping the Context here (once, before ComposeView
+                // construction) is sufficient.
+                val resourceOverrideContext = wrapContextForResourceStringOverride(activity)
+                konativeResourceStringOverrideSelfCheck(resourceOverrideContext)
+
+                val composeView = ComposeView(resourceOverrideContext).apply {
                     setViewTreeLifecycleOwner(owner)
                     setViewTreeViewModelStoreOwner(owner)
                     setViewTreeSavedStateRegistryOwner(owner)

@@ -179,15 +179,61 @@ in the current demo's own dependency closure, not a future risk. **R8 cannot cat
 the way it catches a missing class/field**: the class and field both compile and link fine; the
 failure only ever appears as a runtime exception in a specific interaction state.
 
-Fixing this needs a real, deliberate decision this update does NOT make unilaterally: either
-`testapp/`'s own `build.gradle.kts` declares these AndroidX dependencies for real (letting AGP's
-normal resource merge/link produce a real backing `resources.arsc` in `testapp`'s own installed
+Fixing this **in general** needs a real, deliberate decision this update does NOT make unilaterally:
+either `testapp/`'s own `build.gradle.kts` declares these AndroidX dependencies for real (letting
+AGP's normal resource merge/link produce a real backing `resources.arsc` in `testapp`'s own installed
 APK, since the dex-loaded code runs inside that APK's real `Activity`/`Application` `Context` —
 `Resources` resolution has nothing to do with which `ClassLoader` loaded the calling class) — which
 sits in real tension with `testapp/README.md`'s own Hard Rule that its Gradle/AGP plugin exists ONLY
-to compile the one loader `.kt` file — or some other, not-yet-researched mechanism for the dex-loaded
-module to carry its own resource table. Tracked here explicitly so it doesn't silently get lost; not
-attempted in this update.
+to compile the one loader `.kt` file — or the general mechanism researched and designed (not yet
+built) in the update below. Tracked here explicitly so it doesn't silently get lost.
+
+## Update (2026-07-18, part 2) — the two specific known-broken fields fixed with a small, scoped patch; a general mechanism researched and designed, deferred as genuinely not urgent yet
+
+**The two specific fields identified above (`R.string.tab`/`R.string.switch_role`) are fixed** —
+`KonativeResourceStringOverride.kt` (new file) wraps the host `Activity`'s `Context` (once, in
+`KonativeEntryPoint.kt`, before `ComposeView` construction) with a small `ContextWrapper`/`Resources`
+pair that intercepts `getString(int)` for exactly these two hardcoded IDs (real values confirmed from
+an actual Step 1.5 build artifact: `0x7f08001b`→`"Tab"`, `0x7f08001a`→`"Switch"`), falling through to
+the real (still-broken-for-everything-else) `Resources` for every other ID. Confirmed via real
+bytecode tracing (`Wrapper_androidKt.setContent`'s `new AndroidComposeView(this.getContext(), ...)`
+call) that the Context flows unwrapped all the way from `ComposeView(activity)` to the real
+`AndroidComposeView` whose accessibility delegate makes the crashing call — no `CompositionLocal`/
+theme-wrapping trick needed, wrapping the Context once is sufficient.
+
+**A real, permanent, self-checking mechanism ships with the fix** (matching this project's own
+"code checks itself" standing design principle) — `konativeResourceStringOverrideSelfCheck()` calls
+`getString()` on both known IDs at every app launch and logs a clear, actionable error if either
+doesn't return the expected value, so a future AAPT2/AndroidX version bump silently reassigning these
+IDs fails loudly instead of serving the wrong string. **Both the fix and the self-check's own
+failure-detection logic were empirically verified, not just reasoned about**: temporarily pointed the
+self-check at the *unwrapped* Context and confirmed it correctly reproduced the original bug
+byte-for-byte (`Resources$NotFoundException: String resource ID #0x7f08001b`) and logged the expected
+error — then reverted and confirmed the real, wrapped-Context path resolves cleanly with no error, on
+the LDPlayer x86_64 emulator (both the negative and positive checks; the physical arm64 phone
+disconnected mid-session before this specific fix could be re-verified there, but this fix is pure
+managed Kotlin/Android-framework logic with no ABI-specific behavior, unlike the native
+cross-compilation concerns that motivated testing both devices earlier).
+
+**What this does NOT fix, deliberately, scoped exactly as designed**: this is a narrow patch for the
+two fields already confirmed broken, not a general resource-table mechanism — any *other*
+`Resources.getString()`/`R$style`/`R$styleable`-backed field a future dependency or composable
+reaches would still fail the same way. A general fix was researched and fully designed this same day
+(two parallel research passes): **`android.content.res.loader.ResourcesLoader`/`ResourcesProvider`**
+(a real, public, non-reflective Android API, confirmed present via `javap` on real API-30 and API-36
+`android.jar` stubs) can load a real resource table from an embedded byte buffer at runtime — and
+`aapt2 link`'s own `-o linked.apk` output, which Step 1.5 already produces and currently discards
+after harvesting only the `R.java` files, was directly confirmed (via `aapt2 dump resources`) to
+already be a complete, correctly-populated `resources.arsc` containing every field this module could
+need, real localized string values included. The full integration sketch (a second `.incbin`-embedded
+blob sibling to the dex, a `memfd_create`→`ResourcesProvider.loadFromTable`→`Resources.addLoaders()`
+chain, gated `SDK_INT >= 30`) is real and buildable, but **deliberately not implemented yet** — a
+separate research pass confirmed this module's own actual composable tree
+(`KonativeRootComposable()`) sets no `Role`/style/styleable-backed semantics property anywhere today,
+so nothing currently exercises any field beyond the two already patched. Revisit this the moment a
+real composable actually needs it (Material3, `Tab`/`Switch`/`Dialog` semantics, custom XML fonts) —
+implementing the general mechanism speculatively, before anything needs it, would be exactly the kind
+of untested, unneeded infrastructure this project's own standing engineering discipline argues against.
 
 ## Adding to this folder
 
