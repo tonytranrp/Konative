@@ -127,11 +127,22 @@ self-checking-loader design). Check `AndroidRuntime:E`/`ActivityManager:E` for a
 rooted LDPlayer emulator, `adb root_shell` access lets you inspect `/data/data/com.konative.testapp/`
 directly if logcat alone isn't enough to diagnose a failure.
 
-**Verified end to end** (2026-07-18, LDPlayer x86_64 emulator), with the fully automated pipeline —
-no `-PkonativeEmbeddedDexPath` override, no hand-built dex: `./gradlew assembleDebug` with only the
-four toolchain properties above compiled `embedded_kotlin/` via `kotlinc`+r8 at build time,
-installed the resulting APK, launched it, and confirmed via logcat + screenshot that `JNI_OnLoad`
-ran, the embedded dex blob passed its SHA-256 self-check, `KonativeResourceProvider`'s opportunistic
-upgrade succeeded, `KonativeEntryPoint.install(Application)` executed, and the real Jetpack Compose
-UI rendered — the same green-`Box`-plus-white-"Konative"-text output as the original hand-built
-milestone (`ARCHITECTURE.md` §6.6/6.7), with zero manual dex-building steps.
+**Verified end to end via `./gradlew assembleDebug`** (2026-07-18, LDPlayer x86_64 emulator, predates
+AAPT2 — scoped historically, not a current claim): with the fully automated pipeline as it existed
+that day — no `-PkonativeEmbeddedDexPath` override, no hand-built dex — `./gradlew assembleDebug`
+with only the *original four* toolchain properties (`kotlinc`+r8, no `aapt2`/`javac`/AAR dir yet)
+compiled `embedded_kotlin/` at build time, installed the resulting APK, launched it, and confirmed
+via logcat + screenshot that `JNI_OnLoad` ran, the embedded dex blob passed its SHA-256 self-check,
+`KonativeResourceProvider`'s opportunistic upgrade succeeded, `KonativeEntryPoint.install(Application)`
+executed, and the real Jetpack Compose UI rendered — the same green-`Box`-plus-white-"Konative"-text
+output as the original hand-built milestone (`ARCHITECTURE.md` §6.6/6.7), with zero manual
+dex-building steps.
+
+**The current pipeline** (`kotlinc`+Compose-compiler-plugin+`aapt2`+r8, all seven toolchain
+properties above) has separately been verified end to end too, as of the same day's later AAPT2
+landing — via a direct `cmake --build` (not a fresh `./gradlew assembleDebug` run) plus a root-push
+deploy of the resulting `.so` onto the same LDPlayer emulator, replacing the installed copy in place
+— identical correct render, clean logcat, no regression. A `./gradlew assembleDebug` run specifically
+exercising all seven properties together hasn't been re-confirmed since AAPT2 landed; the Gradle-driven
+and standalone-CMake-driven paths share the exact same underlying CMake modules, so this is expected
+to work identically, but hasn't been re-proven via that specific entry point.
