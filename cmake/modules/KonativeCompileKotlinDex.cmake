@@ -178,9 +178,18 @@ endif()
 set(_aapt2_manifest "${KONATIVE_GEN_DIR}/aapt2_manifest/AndroidManifest.xml")
 file(WRITE "${_aapt2_manifest}" "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"com.konative.generated\"></manifest>\n")
 
-string(REGEX MATCH "android-([0-9]+)" _aapt2_api_match "${KONATIVE_ANDROID_JAR}")
+# Anchored to the WHOLE immediate parent directory name (not a substring scan across the full
+# path) - a real, reproduced fragility a verify-subagent flagged: an unanchored scan across
+# KONATIVE_ANDROID_JAR's entire path could silently match an unrelated earlier "android-<digits>"
+# substring (e.g. in a username or SDK root directory) instead of erroring, on a machine whose
+# paths happen to collide that way. Anchoring to the parent directory's full name removes that
+# ambiguity entirely - it either matches the real platforms/android-<N>/ convention exactly, or
+# fails loudly.
+get_filename_component(_aapt2_android_jar_dir "${KONATIVE_ANDROID_JAR}" DIRECTORY)
+get_filename_component(_aapt2_android_platform_dir "${_aapt2_android_jar_dir}" NAME)
+string(REGEX MATCH "^android-([0-9]+)$" _aapt2_api_match "${_aapt2_android_platform_dir}")
 if(NOT CMAKE_MATCH_1)
-  message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: could not determine a target API level from KONATIVE_ANDROID_JAR (${KONATIVE_ANDROID_JAR}) - expected a .../platforms/android-<N>/android.jar path")
+  message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: could not determine a target API level - KONATIVE_ANDROID_JAR's immediate parent directory (${_aapt2_android_platform_dir}) is not of the form android-<N> - expected a .../platforms/android-<N>/android.jar path (KONATIVE_ANDROID_JAR=${KONATIVE_ANDROID_JAR})")
 endif()
 set(_aapt2_target_api "${CMAKE_MATCH_1}")
 

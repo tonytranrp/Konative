@@ -52,8 +52,10 @@ screenshot proof, not just a compile-clean claim.
   — the old `embedded_kotlin/r_shim/` stopgap this bullet used to describe is deleted, fully
   replaced. `KONATIVE_AAPT2_AAR_DIR` must point at a directory of the real, unmodified `.aar` files
   (not just their extracted `classes.jar` — those carry no `res/` content) for the same dependency
-  set `KONATIVE_KOTLIN_CLASSPATH_DIR` resolves; see Status below for how this directory is currently
-  assembled, and for what this step does and does not fix (real ID *values*, not a real
+  set `KONATIVE_KOTLIN_CLASSPATH_DIR` resolves — real AARs are already cached locally as a side
+  effect of whatever produced `KONATIVE_KOTLIN_CLASSPATH_DIR` (Gradle's own artifact cache keeps
+  the original AAR alongside the extracted jar it hands to a runtime classpath resolution). See
+  Status below for what this step does and does not fix (real ID *values*, not a real
   `resources.arsc` *table* — see the callout below).
 
 ## Status (2026-07-17) — real Compose UI, rendering, verified on real hardware
@@ -141,7 +143,7 @@ static manifest, `--extra-packages` for every library) produces real `R.java` fo
 at once, which `javac` compiles straight into the same classes directory kotlinc already populated —
 r8's existing dexing step needed zero changes. **Real, measured cost: ~0.35s** (negligible next to
 kotlinc/r8's own per-build time). Verified three ways before landing: a real `cmake --build` (the
-new step's own `-- konative: aapt2-linked real R classes for ...` log line lists all 11 real package
+new step's own `-- konative: aapt2-linked real R classes for ...` log line lists all 12 real package
 names it linked), a fresh root-push deploy to the rooted LDPlayer emulator (identical, correct
 Compose UI render, clean logcat, no `NoSuchFieldError`/crash), and a full desktop-debug rebuild+test
 run (unchanged, Android-only change).

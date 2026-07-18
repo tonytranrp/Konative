@@ -43,25 +43,34 @@ cd testapp
   -PkonativeKotlinc=<path to kotlinc(.bat)> \
   -PkonativeR8=<path to r8(.bat)> \
   -PkonativeAndroidJar=<path to android.jar> \
-  -PkonativeKotlinClasspathDir=<path to a pre-resolved dependency-jar directory>
+  -PkonativeKotlinClasspathDir=<path to a pre-resolved dependency-jar directory> \
+  -PkonativeAapt2=<path to aapt2(.exe)> \
+  -PkonativeJavac=<path to javac(.exe)> \
+  -PkonativeAapt2AarDir=<path to a directory of the real, unmodified .aar files for the same dependency set>
 adb install -t -r app/build/intermediates/apk/debug/app-debug.apk
 ```
 
 (A `gradle wrapper` run — or opening this folder in Android Studio once — is needed once to
 generate `gradlew`/`gradle/wrapper/gradle-wrapper.jar`; neither is vendored in this skeleton.)
 
-**The `kotlinc`+Compose-compiler-plugin+`r8` CMake pipeline that produces the embedded dex is now
-automated** (`cmake/modules/KonativeEmbedKotlinDex.cmake`, `ARCHITECTURE.md` section 6.6) — the
-four `konative*`-prefixed properties above forward straight through to the matching CMake cache
-variables (`KONATIVE_KOTLINC`/`KONATIVE_R8`/`KONATIVE_ANDROID_JAR`/`KONATIVE_KOTLIN_CLASSPATH_DIR`,
-same machine-local-override pattern as `konativeNdkPath` below), which is what `src/platform/
-android/CMakeLists.txt` uses by default now. Each can also be set via the matching env var
-(`KONATIVE_KOTLINC`, `KONATIVE_R8`, `KONATIVE_ANDROID_JAR`, `KONATIVE_KOTLIN_CLASSPATH_DIR`) instead
-of a Gradle property. `KONATIVE_KOTLIN_CLASSPATH_DIR` must be a directory of pre-resolved
-dependency jars (Compose runtime/ui/foundation, activity, lifecycle-runtime/viewmodel, savedstate,
-kotlinx-coroutines-android — NOT kotlin-stdlib.jar, that's sourced automatically from the kotlinc
-distribution itself) — see `embedded_kotlin/README.md` for how this directory is currently
-produced; real Maven dependency resolution from CMake is still an open problem.
+**The `kotlinc`+Compose-compiler-plugin+`aapt2`+`r8` CMake pipeline that produces the embedded dex is
+now automated** (`cmake/modules/KonativeEmbedKotlinDex.cmake`, `ARCHITECTURE.md` section 6.6) — the
+seven `konative*`-prefixed properties above forward straight through to the matching CMake cache
+variables (`KONATIVE_KOTLINC`/`KONATIVE_R8`/`KONATIVE_ANDROID_JAR`/`KONATIVE_KOTLIN_CLASSPATH_DIR`/
+`KONATIVE_AAPT2`/`KONATIVE_JAVAC`/`KONATIVE_AAPT2_AAR_DIR`, same machine-local-override pattern as
+`konativeNdkPath` below), which is what `src/platform/android/CMakeLists.txt` uses by default now.
+Each can also be set via the matching env var (`KONATIVE_KOTLINC`, `KONATIVE_R8`,
+`KONATIVE_ANDROID_JAR`, `KONATIVE_KOTLIN_CLASSPATH_DIR`, `KONATIVE_AAPT2`, `KONATIVE_JAVAC`,
+`KONATIVE_AAPT2_AAR_DIR`) instead of a Gradle property. `KONATIVE_KOTLIN_CLASSPATH_DIR` must be a
+directory of pre-resolved dependency jars (Compose runtime/ui/foundation, activity,
+lifecycle-runtime/viewmodel, savedstate, kotlinx-coroutines-android — NOT kotlin-stdlib.jar, that's
+sourced automatically from the kotlinc distribution itself) — see `embedded_kotlin/README.md` for
+how this directory is currently produced; real Maven dependency resolution from CMake is still an
+open problem. `KONATIVE_AAPT2_AAR_DIR` must be a directory of the real, unmodified `.aar` files
+(not just their extracted `classes.jar` — those carry no `res/` content) for that same dependency
+set, used to generate real AAPT2-linked resource classes (`embedded_kotlin/README.md`'s
+2026-07-18 update) — real AARs are already cached locally as a side effect of whatever produced
+`KONATIVE_KOTLIN_CLASSPATH_DIR`.
 
 `-PkonativeEmbeddedDexPath=<path to a real classes.dex>` (or the `KONATIVE_EMBEDDED_DEX_PATH` env
 var) remains available as a manual override — set it to skip the automated pipeline entirely and
@@ -72,7 +81,10 @@ installed at all.
 
 One more optional `-P`/env-var override exists for the same reason `CMakeUserPresets.json` exists
 for the standalone `cmake --preset` flow (see `BUILDING.md`) — a machine-local escape hatch that
-never gets committed as a hardcoded path:
+never gets committed as a hardcoded path (the seven `konativeKotlinc`/`konativeR8`/`konativeAndroidJar`/
+`konativeKotlinClasspathDir`/`konativeAapt2`/`konativeJavac`/`konativeAapt2AarDir` properties above are
+this same kind of escape hatch too, just documented in the main example since they're needed on every
+machine, not just some):
 
 - `konativeGitExecutable` / `KONATIVE_GIT_EXECUTABLE` — `BUILDING.md`'s `-DGIT_EXECUTABLE=...`
   git.cmd-shim workaround. A bare `-DGIT_EXECUTABLE=...` on the `gradle` command line does **not**
