@@ -1,19 +1,23 @@
 # Konative — Architecture
 
-> **STATUS (2026-07-17, updated): §6 rewritten below with the landed Compose/dex design — the
-> `NativeActivity`/raw-EGL design this banner used to warn about is now gone, not just flagged.**
-> Earlier the same day, this document described Kotlin/Native + raw EGL/GLES rendering (no JVM, no
-> dex). That was reversed: Konative's rendering is **JVM-hosted Jetpack Compose**, which
+> **STATUS (2026-07-18, updated): the full Compose/dex design in §6 is landed and verified on real
+> hardware end to end, including the build automation — the `NativeActivity`/raw-EGL design this
+> banner used to warn about is gone, not just flagged.**
+> Earlier in this project's history, this document described Kotlin/Native + raw EGL/GLES rendering
+> (no JVM, no dex). That was reversed: Konative's rendering is **JVM-hosted Jetpack Compose**, which
 > fundamentally requires real JVM/ART (Compose cannot run on Kotlin/Native) — so dex embedding is
 > back for the rendering/UI layer, built as one clean, self-checking CMake+C++ framework (in the
 > spirit of corrosion) rather than GameHub's own ad-hoc per-module reflection code. §6 below is the
 > current design, grounded in `research/incbin_embedding_research.md` and
-> `research/jni_activity_bootstrap_research.md`. Two of its pieces are landed and verified on real
-> hardware (`cmake/modules/KonativeEmbedBlob.cmake`'s `.incbin` embedder,
-> `include/konative/embed/checked_blob.hpp`'s SHA-256 self-check); the rest (the actual
-> `JNI_OnLoad`, the dex-loader, and the `kotlinc`+Compose-compiler-plugin+`d8` CMake pipeline) is
-> still open — §6.7 states exactly which is which. See the `project-konative-autonomous-loop`
-> memory entry for the full iteration-by-iteration history.
+> `research/jni_activity_bootstrap_research.md`. Every piece of it is now landed and verified on real
+> hardware: `cmake/modules/KonativeEmbedBlob.cmake`'s `.incbin` embedder and
+> `include/konative/embed/checked_blob.hpp`'s SHA-256 self-check (§6.5), the `JNI_OnLoad` entry point
+> and dex-loader (§6.4), and the `kotlinc`+Compose-compiler-plugin+**`r8`** CMake pipeline
+> (`KonativeEmbedKotlinDex.cmake`, §6.6) — real Jetpack Compose UI renders on-device, zero
+> OpenGL/EGL/Vulkan anywhere. §6.7's status table states exactly what's landed vs. the remaining
+> lower-priority open items (AAPT2 resource linking is still a hand-shimmed stopgap; an R8 optimizer
+> bug is worked around, not root-caused). See the `project-konative-autonomous-loop` memory entry for
+> the full iteration-by-iteration history.
 
 This document is the synthesized design for Konative: a CMake/C++ framework combining Kotlin and
 C++ into **one native Android `.so`** — rendering and app logic together. Everything below is

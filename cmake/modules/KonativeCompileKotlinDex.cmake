@@ -63,8 +63,20 @@ string(APPEND _kotlinc_classpath "${KONATIVE_ANDROID_JAR}")
 # Program Files) silently split at the space, dropping android.jar off the classpath entirely and
 # surfacing as "unresolved reference: Activity/Bundle" with no classpath-related error at all - not
 # a hypothetical, every standalone-line value below is quoted because of this real, reproduced bug.
+#
+# -Xcompiler-plugin=<path> can't use the two-line "-classpath\n\"<value>\"" form above - it's an
+# =-joined single token, not a space-separated flag/value pair, so the whole line can't just be
+# wrapped in quotes without also quoting the "-Xcompiler-plugin=" prefix (which kotlinc would then
+# fail to recognize as the flag at all). Confirmed empirically (repro: a dummy jar under a
+# space-containing scratch path, compiled via kotlinc.bat @argfile) that quoting only the path
+# portion within the token - "-Xcompiler-plugin=\"<path>\"" - tokenizes correctly: the unquoted form
+# truncated at the space ("error: no plugins found in given classpath: .../space"), the
+# partial-quoted form resolved the full path (proceeded to actually try opening the jar). This is
+# the same real bug class as the classpath/android.jar one above, just for KONATIVE_COMPOSE_PLUGIN's
+# own path (wherever the kotlinc distribution's plugin jar unpacks to - not guaranteed space-free
+# just because this dev machine's kotlinc happens to be under a space-free path).
 set(_kotlinc_argfile "${KONATIVE_GEN_DIR}/kotlinc_args.txt")
-file(WRITE "${_kotlinc_argfile}" "-jvm-target\n1.8\n-Xcompiler-plugin=${KONATIVE_COMPOSE_PLUGIN}\n-classpath\n\"${_kotlinc_classpath}\"\n-d\n\"${_classes_dir}\"\n")
+file(WRITE "${_kotlinc_argfile}" "-jvm-target\n1.8\n-Xcompiler-plugin=\"${KONATIVE_COMPOSE_PLUGIN}\"\n-classpath\n\"${_kotlinc_classpath}\"\n-d\n\"${_classes_dir}\"\n")
 foreach(_src IN LISTS KONATIVE_SOURCES)
   file(APPEND "${_kotlinc_argfile}" "\"${_src}\"\n")
 endforeach()
@@ -133,8 +145,6 @@ set(_produced_dex "${_dex_dir}/classes.dex")
 if(NOT EXISTS "${_produced_dex}")
   message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: r8 reported success but ${_produced_dex} does not exist")
 endif()
-file(COPY "${_produced_dex}" DESTINATION "${KONATIVE_GEN_DIR}")
-get_filename_component(_dex_file_name "${KONATIVE_DEX_FILE}" NAME)
-file(RENAME "${KONATIVE_GEN_DIR}/classes.dex" "${KONATIVE_DEX_FILE}")
+file(RENAME "${_produced_dex}" "${KONATIVE_DEX_FILE}")
 
 message(STATUS "konative: compiled+dexed ${KONATIVE_DEX_FILE}")

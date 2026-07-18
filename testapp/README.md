@@ -28,7 +28,7 @@ means `testapp/` needs a real `Activity`, not the framework-provided `android.ap
   `libkonative_app_native.so`).
 - **The Kotlin Android Gradle plugin in `app/build.gradle.kts` exists ONLY to compile this one
   loader file.** It must never be used to compile the real Compose UI code — that code is
-  compiled by a separate, hand-rolled `kotlinc`+`d8` CMake pipeline and embedded into the `.so`
+  compiled by a separate, automated `kotlinc`+`r8` CMake pipeline and embedded into the `.so`
   directly (this is the whole point of the framework — see `ARCHITECTURE.md`), not built by
   Gradle's normal Kotlin/AGP pipeline into a second dex file the APK ships separately.
 

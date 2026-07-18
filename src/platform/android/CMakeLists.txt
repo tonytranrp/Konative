@@ -30,7 +30,7 @@ if(KONATIVE_EMBEDDED_DEX_PATH)
     VERIFY_SHA256
   )
 else()
-  file(GLOB_RECURSE _konative_app_kt_sources
+  file(GLOB_RECURSE _konative_app_kt_sources CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../embedded_kotlin/src/*.kt"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../embedded_kotlin/r_shim/*.kt"
   )
