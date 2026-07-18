@@ -1,22 +1,24 @@
 # Konative — Architecture
 
-> **STATUS (2026-07-17): rendering direction reversed again — read this before trusting §6
-> below.** Everything in §6 (Kotlin/Native + raw EGL/GLES rendering, no JVM/no dex) describes the
-> design as of earlier the same day. The user then explicitly redirected Konative's rendering to
-> **JVM-hosted Jetpack Compose**, which fundamentally requires real JVM/ART (Compose cannot run on
-> Kotlin/Native) — meaning **dex embedding is back** for the rendering/UI layer specifically, this
-> time built as one clean, self-checking CMake+C++ framework (in the spirit of corrosion) rather
-> than GameHub's own ad-hoc per-module reflection code. §6 is left intact below as a historical
-> record of the design it superseded (and because the Kotlin/Native `-produce static` + `@CName`
-> C-ABI mechanics it documents may still be useful for non-rendering native logic later) — do not
-> implement new rendering code against §6's design. See the `project-konative-autonomous-loop`
-> memory entry for the full reasoning and current status; §6 will be rewritten in place once the
-> in-flight research on Compose-in-a-dex-loaded-context and the self-checking loader design lands.
+> **STATUS (2026-07-17, updated): §6 rewritten below with the landed Compose/dex design — the
+> `NativeActivity`/raw-EGL design this banner used to warn about is now gone, not just flagged.**
+> Earlier the same day, this document described Kotlin/Native + raw EGL/GLES rendering (no JVM, no
+> dex). That was reversed: Konative's rendering is **JVM-hosted Jetpack Compose**, which
+> fundamentally requires real JVM/ART (Compose cannot run on Kotlin/Native) — so dex embedding is
+> back for the rendering/UI layer, built as one clean, self-checking CMake+C++ framework (in the
+> spirit of corrosion) rather than GameHub's own ad-hoc per-module reflection code. §6 below is the
+> current design, grounded in `research/incbin_embedding_research.md` and
+> `research/jni_activity_bootstrap_research.md`. Two of its pieces are landed and verified on real
+> hardware (`cmake/modules/KonativeEmbedBlob.cmake`'s `.incbin` embedder,
+> `include/konative/embed/checked_blob.hpp`'s SHA-256 self-check); the rest (the actual
+> `JNI_OnLoad`, the dex-loader, and the `kotlinc`+Compose-compiler-plugin+`d8` CMake pipeline) is
+> still open — §6.7 states exactly which is which. See the `project-konative-autonomous-loop`
+> memory entry for the full iteration-by-iteration history.
 
 This document is the synthesized design for Konative: a CMake/C++ framework combining Kotlin and
 C++ into **one native Android `.so`** — rendering and app logic together. Everything below is
-grounded in the six research passes summarized in §11 (plus the reversal noted above, whose own
-research/provenance will be appended once its two in-flight subagents land).
+grounded in the research passes summarized in §15 (plus the rendering-direction reversal noted
+above).
 
 ---
 
@@ -185,9 +187,24 @@ even with `CPM_SOURCE_CACHE` populated.
 
 ---
 
-## 6. Android integration: NativeActivity / GameActivity, EGL/Vulkan, and the Kotlin shim
+## 6. Android integration: `JNI_OnLoad`, embedded-dex Compose, and the self-checking loader
 
-### 6.1 Entry point and event loop
+`NativeActivity`/`GameActivity`/`android_native_app_glue` — §6.1's subject below — **no longer
+apply to the rendering/app target at all.** `NativeActivity` takes over the whole window as a raw
+`Surface`; it cannot host a `setContentView(composeView)` tree at all, which rules it out
+categorically once rendering is JVM-hosted Compose rather than raw EGL. `testapp/`'s manifest
+already reflects this (a plain `Activity`, not `NativeActivity`) and
+`src/platform/android/{android_main.cpp,activity_bridge.cpp,looper_pump.cpp}` are consequently dead
+code as of this rewrite — orphaned since the manifest change, scheduled for deletion alongside the
+`JNI_OnLoad` rewrite landing (§6.7). **§6.1–6.3 below are kept, not deleted, and are the historical
+design those dead files (plus `native/`, `include/konative/{interop,render}/`, and a number of
+other still-existing files) were written against** — many real, currently-live files still cite
+these exact section numbers for mechanics that remain individually true (the `@CName`/`_api.h`
+boundary shape, the documented Kotlin/Native+NDK linking risk, the `Result<T,E>`-at-interop-
+boundaries rule) even though none of it is the current rendering path. Do not implement new
+rendering code against §6.1–6.3 — the current design is §6.4 onward.
+
+### 6.1 [SUPERSEDED for rendering — kept for `native/`/`interop/`/`render/`'s still-existing code] Entry point and event loop
 
 `android_native_app_glue` (or Google's newer **GameActivity**, the actively recommended
 replacement) supplies the native event loop: an `android_app` struct, an `ALooper`-based command
@@ -206,63 +223,48 @@ flag:
 Real-world precedent (Rust's `android-activity`) confirms **both are viable and the choice is a
 real feature-flag-level decision, not a default to assume**: it recommends `NativeActivity` "if
 you may not need to compile/link any Java or Kotlin code," and only requires the trivial subclass
-under `GameActivity`. Konative should expose this as a build-time choice (mirroring
-`android-activity`'s Cargo-feature split) rather than hardcoding one.
+under `GameActivity`. This choice is now moot for Konative's own rendering/app target (§6.4 replaces
+it categorically), but the table above remains accurate documentation for the still-existing
+`src/platform/android/*` code until it's actually deleted.
 
-### 6.2 Rendering lives in Kotlin/Native, not in C++ — a deliberate revision
+### 6.2 [SUPERSEDED for rendering — kept for the same reason] Rendering lives in Kotlin/Native, not in C++ — a deliberate revision
 
 An earlier pass of this skeleton gave Konative its own hand-written C++ EGL/GLES/Vulkan backend
 (`render/backend/gles/`, `render/backend/vulkan/`). **That backend has been deleted.** It
 duplicated exactly the responsibility Kotlin/Native already lets Kotlin own directly. Splitting
 rendering across *two* languages (a C++ backend calling EGL, plus Kotlin/Native logic calling back
-into that C++ backend) added a second interop hop for no benefit — Konative's whole premise is
-that Kotlin/Native code is real native code, fully capable of calling
-`eglGetDisplay`/`glClear`/`eglSwapBuffers` itself.
+into that C++ backend) added a second interop hop for no benefit — Konative's whole premise (at the
+time) was that Kotlin/Native code is real native code, fully capable of calling
+`eglGetDisplay`/`glClear`/`eglSwapBuffers` itself. **This premise itself is now superseded for
+rendering specifically** (this document's top banner, and §6.4 onward) — Compose needs the real
+JVM/ART object model Kotlin/Native categorically cannot provide, not just an EGL surface.
 
-**A load-bearing finding that materially de-risks this**: Kotlin/Native ships pre-built cinterop
-bindings for EGL, GLES2/GLES3, and core Android NDK types (`ANativeWindow`, `ANativeActivity`) for
-every `androidNative*` target **out of the box** — `platform.egl`/`platform.gles2`/
-`platform.gles3`/`platform.android`, sourced from
+**A load-bearing finding, still true, still potentially useful for non-rendering native logic**:
+Kotlin/Native ships pre-built cinterop bindings for EGL, GLES2/GLES3, and core Android NDK types
+(`ANativeWindow`, `ANativeActivity`) for every `androidNative*` target **out of the box** —
+`platform.egl`/`platform.gles2`/`platform.gles3`/`platform.android`, sourced from
 `kotlin-native/platformLibs/src/platform/android/*.def` in the JetBrains/kotlin compiler
 distribution itself. No custom `.def` file, no manual NDK sysroot `-I` wiring, is needed for GLES
-rendering — `native/src/Renderer.kt` just `import`s these packages directly. `native/cinterop/`
-is correctly **empty** in this skeleton as a result; it's reserved for a genuinely un-bundled C
-API (Vulkan is the one confirmed example — no `vulkan.def` ships, so Vulkan-from-Kotlin/Native
-would need a hand-authored `.def`, with essentially zero public prior art to draw on).
+access — `native/cinterop/` is correctly **empty** in this skeleton as a result; it's reserved for
+a genuinely un-bundled C API (Vulkan is the one confirmed example — no `vulkan.def` ships).
 
-There is also **real, working, published prior art** for exactly this combination:
+There is also **real, working, published prior art** for this combination:
 [**natario1/Egloo**](https://github.com/natario1/Egloo), a maintained Kotlin Multiplatform library
 that binds EGL+GLES for `androidNative*` targets (published `.klib` artifacts for
 `androidNativeArm64`/`X64`/`Arm32`/`X86`), with real `androidNativeMain` source doing exactly the
-`platform.egl`/`platform.gles2` calls Konative needs (`eglGetDisplay`, `eglInitialize`,
-`eglCreateWindowSurface` from an `EGLNativeWindowType`, `eglMakeCurrent`, `eglSwapBuffers`, GLES
-draw calls) — `native/src/Renderer.kt`'s own top comment points at Egloo's `egl.kt`/`EglCore.kt`
-as the reference to port the config/context/surface-creation sequence from. **Important caveat**:
-Egloo proves the cinterop *bindings* compile and link on Android native targets; its own demo app
-is a conventional JVM Activity, not a `NativeActivity`-driven, JVM-free app — the "no JVM at all"
-end-to-end render loop is still Konative's own validation to do, not something Egloo has already
-proven on-device the way Konative needs it.
+`platform.egl`/`platform.gles2` calls (`eglGetDisplay`, `eglInitialize`, `eglCreateWindowSurface`
+from an `EGLNativeWindowType`, `eglMakeCurrent`, `eglSwapBuffers`, GLES draw calls) —
+`native/src/Renderer.kt`'s own top comment points at Egloo's `egl.kt`/`EglCore.kt` as the reference
+for the config/context/surface-creation sequence, should this code ever be revived for a
+non-rendering purpose.
 
-**Current design**: `render/renderer.hpp` (C++) does nothing but translate
-`WindowCreatedEvent`/`WindowDestroyedEvent`/a per-frame tick into three flat `@CName` calls across
-the interop boundary (`konative_render_on_window_created`, `konative_render_on_window_destroyed`,
-`konative_render_tick` — declared in `interop/kotlin_native_bridge.hpp`). `native/src/Renderer.kt`
-receives the raw `ANativeWindow*` (as a `COpaquePointer?`, `reinterpret`'d to the bundled
-`platform.android.ANativeWindow` type — `EGLNativeWindowType` is literally `struct ANativeWindow*`
-on Android, per the Khronos EGL spec, so no additional cast machinery is needed), owns the EGL
-context/surface entirely in Kotlin, and does all `eglCreateWindowSurface`/`glClear`/
-`eglSwapBuffers`-equivalent calls there. **No `EGL/`, `GLES*/`, or `vulkan/` header may ever be
-included anywhere under `include/konative/`** — that's a hard rule enforced by `render/README.md`
-(§12), not just a convention.
+`native/src/Renderer.kt` (currently implemented only through `eglInitialize`, with the rest
+deliberately left as a TODO) is frozen as a historical spike, not extended further — see §6.7's
+status table. **No `EGL/`, `GLES*/`, or `vulkan/` header may ever be included anywhere under
+`include/konative/`** remains a live, enforced hard rule regardless (`render/README.md`), since
+`include/konative/` itself isn't specific to any one rendering approach.
 
-This remains the framework's biggest concentration of unproven risk (§9) — Egloo de-risks the
-*binding* layer, not the *no-JVM-at-all, NativeActivity-driven* render loop Konative specifically
-needs — so treat `native/src/Renderer.kt` (currently implemented only through `eglInitialize`,
-with the config/context/surface-creation sequence deliberately left as a TODO rather than guessed
-at) as a spike to validate, not a finished implementation, until it's actually cleared a frame on
-the connected test device.
-
-### 6.3 The Kotlin/Native ⇄ C++ boundary — and its real, documented risk
+### 6.3 [SUPERSEDED for rendering — kept for the same reason, and because its core principle is still current] The Kotlin/Native ⇄ C++ boundary — and its real, documented risk
 
 Kotlin/Native's `-produce static` mode emits a static archive plus a generated `_api.h` C-ABI
 header (nested function-pointer-table struct, manual `DisposeString`/`DisposeStablePointer`
@@ -282,12 +284,122 @@ unresolved `libc++`/libm symbols when linking a Kotlin/Native `android_arm32` st
 NDK CMake project, and a separate Kotlin Discussions thread reports an `UnsatisfiedLinkError` for
 a hand-written C function called from a cinterop-consumed static lib on Android. The Android
 Kotlin/Native targets (`androidNativeArm32/64`, `androidNativeX86/X64`) are also officially
-**Tier 3** — "not guaranteed to be tested on CI... use with caution." **Mitigation**: pin the NDK
-version and the Kotlin/Native compiler version together deliberately, control symbol visibility
-explicitly (`-fvisibility=hidden` + explicit exports on both sides), and budget an early spike to
-prove the link works *before* designing further architecture on top of the assumption that it
-does. This is the single highest-uncertainty piece of the whole framework — everything else
-researched has working precedent; this specific combination does not, yet.
+**Tier 3** — "not guaranteed to be tested on CI... use with caution." This remains real,
+documented risk for `native/`'s existing code (should it ever be revived for a non-rendering
+purpose) — it just no longer blocks anything on Konative's current critical path, since that path
+no longer depends on this specific link succeeding (§9).
+
+**The one part of this subsection that outlives the Kotlin/Native context entirely**: prefer
+`Result<T, E>` (`core/result.hpp`) over an exception at *any* interop boundary a C++ exception
+cannot safely unwind across — true of the old Kotlin/Native `@CName` boundary, equally true of the
+new `JNI_OnLoad`/JNI boundary (§6.4/§6.5). `core/README.md` and `embed/README.md` both cite this
+same principle for exactly that reason.
+
+### 6.4 Entry point: `JNI_OnLoad`, not `android_main`
+
+`testapp/`'s one-and-only `.kt` file is, in full:
+
+```kotlin
+class MainActivity : Activity() {
+    companion object { init { System.loadLibrary("konative_app_native") } }
+}
+```
+
+It never overrides `onCreate()` or calls `setContentView()` — every bit of that behavior must
+originate from native code, triggered only by the `JNI_OnLoad(JavaVM*, void*)` callback
+`System.loadLibrary()` invokes automatically. This is guaranteed to run to completion **before**
+`MainActivity.onCreate()` can execute, independent of any Android-version-specific trivia: Kotlin
+compiles the companion object's `init {}` block into `MainActivity`'s `<clinit>`, and the JLS/JVM
+spec guarantees a class's static initializer completes before any instance of that class can be
+constructed — `onCreate()` cannot run on an instance that doesn't exist yet.
+
+Full design, all JNI signatures, and the hidden-API research behind step 1 below:
+`research/jni_activity_bootstrap_research.md` §5.
+
+1. **The one hidden-API call in this whole design**: `ActivityThread.currentApplication()` via
+   ordinary JNI reflection (`FindClass`/`GetStaticMethodID`/`CallStaticObjectMethod`) — verified
+   directly against Google's own published `hiddenapi-flags.csv` to be `unsupported`
+   (usable-indefinitely tier, never `max-target-X`/`blocked`) continuously from API 29 through the
+   current release, which covers this project's own API 26–36 target range.
+2. **Verify, then load, the embedded dex** — §6.5/§6.6 below.
+3. **One handoff call, then native code is done**: `CallStaticVoidMethod` invoking a single
+   `@JvmStatic fun install(application: Application)` entry point in the freshly-loaded dex class.
+   Everything past this point — registering `Application.ActivityLifecycleCallbacks`, fabricating
+   the `LifecycleOwner`/`ViewModelStoreOwner`/`SavedStateRegistryOwner` a plain `Activity` doesn't
+   provide automatically, building the `ComposeView`, calling `activity.setContentView(view)` — is
+   real, compiled Kotlin running as real loaded JVM bytecode, not further JNI reflection. Compose's
+   own APIs change far more often than `ActivityLifecycleCallbacks`; keeping them in Kotlin means
+   Konative's own build catches breakage at compile time instead of a user's device at runtime.
+
+### 6.5 The embedded blob: build-time, `.incbin`, self-checking — landed and verified
+
+**Shipped and verified on real hardware** (both arm64-v8a and x86_64, via the real installed NDK
+r28 — see the `project-konative-autonomous-loop` memory log, iterations 7–9 for the full
+verification history including one real bug caught and fixed):
+
+- `cmake/modules/KonativeEmbedBlob.cmake`'s `konative_embed_binary_blob(<target> BLOB <path>
+  SYMBOL <prefix> [VERIFY_SHA256])` embeds an arbitrary file as linked read-only data via a GAS
+  `.incbin` directive (chosen over C-array text generation, which chokes lexing a multi-MB
+  generated source file — `research/incbin_embedding_research.md` §§1–2, 4), exposing
+  `extern "C" { extern const unsigned char <prefix>_start[]; extern const unsigned char
+  <prefix>_end[]; extern const uint64_t <prefix>_size; }`. Requires the including project to have
+  already called `enable_language(ASM)` (Konative's own top-level `CMakeLists.txt` does this inside
+  its `if(ANDROID)` block) — the function itself deliberately does not call it, after a real,
+  reproduced bug proved doing so only works as a *redundant* second call, never as the first.
+- `VERIFY_SHA256` additionally computes the blob's real SHA-256 at build time (`file(SHA256 ...)`,
+  CMake's own builtin) and embeds it as `<prefix>_expected_sha256[32]`.
+- `include/konative/embed/checked_blob.hpp`'s `verify_blob()` is the runtime counterpart: re-hashes
+  the actual embedded bytes (via `PicoSHA2`) and compares against that constant, returning
+  `Result<span, BlobVerifyError>` rather than throwing (the JNI boundary is exactly the kind of
+  interop boundary §6.3 used to warn a C++ exception can't safely cross — that constraint carries
+  over unchanged from the old Kotlin/Native design to this one). **This is a build-integrity
+  self-check, catching "the build pipeline embedded the wrong/truncated bytes," not a tamper/
+  security boundary** — the expected hash sits in cleartext right next to the data it verifies.
+
+### 6.6 The embedded dex: what's still open
+
+Not yet built: the actual `kotlinc`+Compose-compiler-plugin+`d8` CMake pipeline that produces the
+real dex blob §6.5 embeds, and the real Kotlin source it compiles. Concrete, ready-to-implement
+design (`research/jni_activity_bootstrap_research.md` §§2–3, validated end-to-end already once via
+a manual scratchpad spike — real Maven coordinates, real `kotlinc -Xcompiler-plugin=<bundled
+plugin>` invocation, real `javap`-verified bytecode, real `d8` output):
+
+- **The "one `.kt` file in `testapp/`" rule does not reach the embedded dex.** Two independent
+  build pipelines exist: `testapp/`'s own Gradle/AGP pass compiles exactly `MainActivity.kt`;
+  Konative's own CMake-driven pipeline compiles a separate Kotlin source tree (outside `testapp/`
+  entirely) into the dex blob that gets embedded as opaque bytes in the `.so` — `testapp/`'s build
+  never sees those `.kt` files at all.
+- The embedded dex must bundle `compose-runtime`/`compose-ui`/`lifecycle-runtime`/
+  `lifecycle-viewmodel`/`savedstate` jars (extracted from their AARs) on its own classpath, unlike
+  `GameHub`'s simpler Dialog-based dex blobs — Compose is never part of the Android OS image the
+  way plain `View`/`Dialog`/`WindowManager` are. **Real open risk, not glossed over**: this very
+  likely pushes the unshrunk blob size well past `research/research.md` §8's already-cited
+  "~2.5MB for a near-trivial Kotlin object" — genuinely unmeasured as of this rewrite.
+- Real, working reflection precedent for the dex-loading mechanics themselves (steps between §6.4's
+  step 1 and step 3): `GameHub/libs/jni/src/dex_loader.cpp`'s already-proven
+  `getClassLoader()`→`NewDirectByteBuffer`→`InMemoryDexClassLoader`→`loadClass()`-via-reflection
+  sequence (`env->FindClass()` can't see dex-loaded classes since it resolves relative to the
+  *calling* native method's own class, which doesn't apply to a call that didn't originate from
+  Java) — port this into Konative's own `Result<T,E>`-based style, gated on `verify_blob()`
+  succeeding first.
+- The Kotlin-side sketch (`Application.ActivityLifecycleCallbacks` fabricating a
+  `LifecycleOwner`/`ViewModelStoreOwner`/`SavedStateRegistryOwner` holder, wiring a `ComposeView`
+  via `setViewTreeLifecycleOwner`/etc., calling `activity.setContentView`) is fully written out in
+  `research/jni_activity_bootstrap_research.md` §5.2 — implement against that directly rather than
+  re-deriving it.
+
+### 6.7 Status: what's landed vs. still open, as of this rewrite
+
+| Piece | Status |
+|---|---|
+| `.incbin` blob embedder + build-time SHA-256 (`KonativeEmbedBlob.cmake`) | **Landed, verified on real arm64-v8a + x86_64 hardware** |
+| Runtime SHA-256 self-check (`include/konative/embed/checked_blob.hpp`) | **Landed, verified (desktop unit tests + real on-device round-trip)** |
+| `JNI_OnLoad` entry point | Designed (§6.4), not yet implemented |
+| Dex-loader (`InMemoryDexClassLoader` construction) | Designed (§6.6), not yet ported from `GameHub` |
+| `kotlinc`+Compose-compiler-plugin+`d8` CMake pipeline | Designed (§6.6), validated manually once via scratchpad spike, not yet automated |
+| Embedded Kotlin+Compose source tree | Designed (§6.6/§6.4 step 3), not yet written |
+| `src/platform/android/{android_main,activity_bridge,looper_pump}.cpp` | **Dead code — scheduled for deletion**, not yet removed |
+| Kotlin/Native (`native/src/Renderer.kt`, EGL/GLES rendering) | **Fully superseded for rendering** — kept only as a historical record; do not extend |
 
 ---
 
@@ -372,35 +484,40 @@ Being explicit about this matters more than usual here, since several of these p
 been combined before by anyone found in this research.
 
 **Has real, working, citable precedent:**
-- Kotlin/Native producing a static lib + C-ABI header, consumed via plain C linkage (JetBrains'
-  own documented mechanism, if not Android-specific in JetBrains' own tutorials).
-- `android_native_app_glue`/`GameActivity`'s event loop and lifecycle callback mechanics
-  themselves (official NDK/AGDK samples) — the C++-side glue code in `src/platform/android/` is
-  low-risk, ordinary NDK usage.
-- EGL/GLES/Vulkan calls against an `ANativeWindow*` **from C/C++** (official NDK/AGDK samples) —
-  the graphics-API mechanics are well-documented; what's unproven (below) is doing them from
-  Kotlin/Native specifically.
+- `dalvik.system.InMemoryDexClassLoader` construction from native code, and the
+  `getClassLoader()`/`NewDirectByteBuffer`/reflection-`loadClass()` sequence around it — real,
+  working code in `GameHub/libs/jni/src/dex_loader.cpp` (§6.6).
+- GAS `.incbin` for embedding a multi-MB binary blob into a CMake-built Android `.so` — not just
+  designed but **landed and verified on real arm64-v8a + x86_64 hardware** (§6.5,
+  `cmake/modules/KonativeEmbedBlob.cmake`), with `official-stockfish/Stockfish`'s own NNUE-embedding
+  as real precedent at a comparable size scale (`research/incbin_embedding_research.md` §4).
+- `ActivityThread.currentApplication()`'s hidden-API standing — not assumed safe, directly verified
+  against Google's own published `hiddenapi-flags.csv` for this project's exact API range (§6.4).
 - EnTT's `meta`/`registry`/`dispatcher` individually, at scale, in real shipped projects.
 - CPM.cmake vendoring for offline-reproducible builds (this workspace's own `GameHub` already does
   it).
 - A near-zero-Kotlin/Java APK shell (`GameHub/testapp`'s `MainActivity` is a real, on-device-proven
-  instance of exactly this shape, `System.loadLibrary()` and nothing else — for JVM Kotlin, not
-  Kotlin/Native, but the manifest-level mechanics carry over; Konative's own `testapp/` goes one
-  step further with zero Kotlin/Java code at all, via `NativeActivity` + `hasCode="false"`).
+  instance of exactly this shape, `System.loadLibrary()` and nothing else — Konative's own
+  `testapp/` matches this shape exactly, per §6.4).
 
 **Architecturally sound synthesis, partially de-risked by real prior art, still not fully
 validated — prototype first:**
-- **Kotlin/Native calling EGL/GLES directly via its bundled `platform.egl`/`platform.gles3`
-  cinterop bindings, receiving an `ANativeWindow*` handed in across the `@CName` flat-C-ABI
-  boundary from C++ and `reinterpret`-ing it to `platform.android.ANativeWindow`** (§6.2/§6.3) —
-  this is still the single largest concentration of unproven risk in the whole framework, but is
-  now *partially* de-risked: `natario1/Egloo` is real, published, working evidence the cinterop
-  bindings themselves compile/link for `androidNative*` targets. What remains genuinely unproven
-  is the **no-JVM-at-all, `NativeActivity`-driven** render loop specifically — Egloo's own demo is
-  a conventional JVM Activity app, not this. Vulkan-from-Kotlin/Native (no bundled bindings, would
-  need a from-scratch `.def`) remains essentially unpaved with zero found prior art either way.
-- Kotlin/Native static-lib linking cleanly into an NDK CMake C++ target with no libc++/symbol
-  conflicts (§6.3 — the one JetBrains issue found on this exact scenario is unresolved).
+- **The full `JNI_OnLoad`-to-rendered-Compose-UI chain** (§6.4/§6.6) — no project found does
+  *exactly* this combination (native-triggered `ActivityLifecycleCallbacks` registration + runtime
+  `ViewTree*Owner` fabrication + Compose from a dex loaded by the app's own `JNI_OnLoad`,
+  `research/jni_activity_bootstrap_research.md` §4). Each individual piece has precedent
+  (`NativeActivity` for native-drives-content, `GameHub`'s dex-embedding, the
+  Compose-without-`ComponentActivity` manual-wiring pattern used by overlay/Service-hosted Compose
+  projects) but the combination itself is unpaved — this is now the framework's single largest
+  concentration of unproven risk, replacing the old Kotlin/Native+EGL entry in this list.
+- **Embedded blob size once Compose's own dependency graph is in the dex** — genuinely unmeasured
+  (§6.6); `research/research.md` §8's "~2.5MB for a near-trivial Kotlin object" figure predates the
+  Compose pivot and almost certainly undercounts once `compose-runtime`/`compose-ui`/
+  `lifecycle`/`savedstate` are on the classpath too.
+- **`onActivityCreated` firing for exactly the right `Activity` instance** is structurally
+  guaranteed by JLS class-init ordering (§6.4), not by an Android-internals citation that could be
+  pinned to an exact source line — treat as "verify once on-device," matching this project's own
+  verify-empirically ethos, not an assumption to build further architecture on unverified.
 - `entt::meta` combined with Boost.PFR for auto-registration, or with Glaze for
   reflection-driven JSON serialization (both philosophically clean, neither found done anywhere).
 - An `entt::dispatcher` + `libcoro` "await the next event" pattern.
@@ -410,9 +527,18 @@ validated — prototype first:**
 Treat the second list as the actual R&D risk of this project. Everything in the first list is
 "assemble known-good pieces"; everything in the second list needs a real spike/prototype before
 committing further architecture on top of an assumption that it works. **The very first
-end-to-end milestone for this framework should be: get `native/src/Renderer.kt` to clear the
-screen a single solid color on the connected test device via `testapp/`** — that one milestone
-proves the interop link, the `ANativeWindow*` handoff, and Kotlin-owns-EGL all at once.
+end-to-end milestone for this framework should be: get a trivial Compose UI (a single solid-color
+`Box` or equivalent) to actually render as `MainActivity`'s content view on the connected test
+device, driven entirely by `JNI_OnLoad`** — that one milestone proves the dex-loading mechanism,
+the `Application`→`Activity` handoff, and Kotlin-owns-Compose all at once, the direct analog of the
+old Kotlin/Native milestone this replaces.
+
+Kotlin/Native itself (static-lib linking into an NDK CMake C++ target via `-produce static` +
+`@CName`, and its real documented linking friction — JetBrains issue kotlin-native#2803, Tier-3
+Android target status) is **no longer on this project's critical path** now that rendering is
+JVM-hosted Compose, not Kotlin/Native+EGL — the mechanics remain real and documented if a future,
+genuinely non-rendering use for Kotlin/Native ever comes up (§6.3), but nothing currently pending
+in this project depends on that risk being resolved.
 
 ---
 
@@ -437,27 +563,33 @@ same root `CMakeLists.txt`, not a copy) into an installable APK, so the framewor
 on an actual device via `adb` rather than only compiled. It owns zero application logic of its own
 — see `testapp/README.md`.
 
-Current shape: `NativeActivity` (§6.1's zero-Kotlin/Java path), `android:hasCode="false"`, one
-`<meta-data android:name="android.app.lib_name">` pointing at the `konative_app_native` target
-`src/platform/android/CMakeLists.txt` builds. This is deliberately the simpler of the two §6.1
-options to prove first — `GameActivity`'s one-trivial-subclass requirement can be added later once
-`NativeActivity` is proven working end to end.
+Current shape (§6.4): one trivial `MainActivity : Activity()` (**not** `NativeActivity` —
+superseded once rendering moved to JVM-hosted Compose, which needs a real View-hosting Activity,
+something `NativeActivity` categorically cannot provide), whose companion-object `init {}` calls
+`System.loadLibrary("konative_app_native")` and nothing else. Every bit of `onCreate`/content-view
+behavior originates from that `.so`'s `JNI_OnLoad`, not from `MainActivity.kt` itself.
 
-**The verification loop** (a physical device — a Galaxy-S24-class phone, API 36, `arm64-v8a` — was
-connected via `adb`/`deepadb` during this framework's development, matching the `android-arm64`
-CMake preset exactly):
+**The verification loop** (a physical device — a Galaxy-S24-class phone, API 36, `arm64-v8a` — plus
+a rooted LDPlayer x86_64 emulator as a second test device, both reachable via `adb`/`deepadb`,
+matching the `android-arm64`/`android-x86_64` CMake presets respectively):
 
 ```sh
 cd testapp && ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n com.konative.testapp/android.app.NativeActivity
+adb shell am start -n com.konative.testapp/com.konative.testapp.MainActivity
 adb logcat -s konative:V AndroidRuntime:E DEBUG:E
 ```
 
 A silent `adb logcat` (no `konative` tag, no crash) most likely means the `.so` never finished
 loading — check `adb logcat *:E` for a dynamic-linker error before assuming anything about
-rendering. This loop is the concrete, executable version of §9's "get `Renderer.kt` to clear the
-screen one solid color" milestone.
+rendering. This loop is the concrete, executable version of §9's "get a trivial Compose UI to
+actually render, driven entirely by `JNI_OnLoad`" milestone — not yet exercised end to end as of
+this rewrite, since the `JNI_OnLoad`/dex-loader/Kotlin+Compose pieces §6.7 lists as still-open
+haven't landed yet. What *has* been verified on-device already (§6.5) is the lower-level embed
+mechanism the eventual `.so` will depend on — pushed and run directly via `adb push` +
+`adb shell` (not through an installed APK at all, since it's a standalone native smoke test, not
+part of `testapp/` — see `tests/README.md`'s and `examples/README.md`'s own rule that Android-only
+mechanisms don't belong in either folder).
 
 ---
 

@@ -6,7 +6,9 @@
 namespace konative::core {
 
 // A minimal Result<T, E>, preferred over exceptions at any interop boundary where an unwound C++
-// exception cannot safely cross (ARCHITECTURE.md section 6.3, section 12's self-checking loader design).
+// exception cannot safely cross (ARCHITECTURE.md section 6.3's "outlives the Kotlin/Native
+// context" note - applies equally to the old @CName boundary and the current JNI_OnLoad one - and
+// include/konative/embed/README.md's own self-checking-loader hard rule).
 // [[nodiscard]] on the class itself (not just its accessors) is deliberate: a function returning
 // a fallible Result whose result gets silently dropped entirely is exactly the bug this type
 // exists to prevent - a code review caught this missing on an earlier pass.
