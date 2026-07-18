@@ -15,11 +15,16 @@ every Konative-authored CMake module (`modules/`).
   moving branch ref even with a populated source cache. **Verify a new/changed tag actually exists**
   (`git ls-remote --tags <repo-url>`) before committing it — this repo's own first real build
   caught a fabricated `glaze` tag that never existed; see `BUILDING.md`.
-- **`CMAKE_POLICY_VERSION_MINIMUM` is set in every `CMakePresets.json` configure preset on
-  purpose** — some CPM-fetched dependencies declare a `cmake_minimum_required` floor below what
-  CMake 4.x still supports running at all (a hard configure error, not just a deprecation
-  warning, hit for real with `doctest`). Bump it if a new dependency needs an even lower floor;
-  never lower it back to fix a symptom without understanding why the error came back.
+- **`CMAKE_POLICY_VERSION_MINIMUM` must never be set globally in `CMakePresets.json`** — CMake's
+  own docs say project code should not set this as a way to fix its own policy version, since it
+  silently lowers the floor for every CPM dependency, not just the one that needs it. It was set
+  globally here for one revision and a code review caught it; the actual, narrow fix lives in
+  `modules/KonativeDependencies.cmake` as a `set(CMAKE_POLICY_VERSION_MINIMUM ...)` /
+  `unset(...)` pair wrapped tightly around just the one `CPMAddPackage()` call that needs it
+  (currently `doctest`, whose `cmake_minimum_required` floor is below what CMake 4.x still
+  supports running at all — a hard configure error, not just a deprecation warning). If a new
+  dependency needs the same treatment, give it its own scoped `set()`/`unset()` pair around just
+  that `CPMAddPackage()` call — never widen the scope back to every preset.
 - **`KonativeAndroidToolchain.cmake` reads the NDK toolchain file's own already-established cache
   variables (`ANDROID_ABI`) — it never re-derives ABI/API-level mapping independently.** If a new
   ABI needs support, add one more branch to its `if/elseif` chain, matching the NDK's own naming,

@@ -51,10 +51,15 @@ match on `PATH` in order; pick a `.exe`, never a `.cmd`).
 
 Some older CPM-fetched dependencies (hit with `doctest` specifically) declare a
 `cmake_minimum_required` version below what CMake 4.x still supports running at all — not just a
-deprecation warning, a hard configure error. Already fixed at the preset level
-(`CMAKE_POLICY_VERSION_MINIMUM: "3.5"` in every `CMakePresets.json` configure preset) — if a
-*newly* added dependency still hits this with an even-lower floor, bump that cache variable, don't
-patch the vendored dependency's own `CMakeLists.txt`.
+deprecation warning, a hard configure error. Already fixed, but **not** at the preset level —
+CMake's own docs say project code should not set `CMAKE_POLICY_VERSION_MINIMUM` globally that way,
+since it silently lowers the floor for every CPM dependency, not just the one that needs it. The
+real fix is scoped narrowly in `cmake/modules/KonativeDependencies.cmake`: a
+`set(CMAKE_POLICY_VERSION_MINIMUM 3.5)` / `unset(...)` pair wrapped tightly around just the
+`doctest` `CPMAddPackage()` call. If a *newly* added dependency hits this with an even-lower floor,
+give it the same narrow treatment — its own `set()`/`unset()` pair around just that call — don't
+widen the scope back to every preset, and don't patch the vendored dependency's own
+`CMakeLists.txt`.
 
 ### `consteval function ... is not a constant expression` deep inside `fmt`/`spdlog` headers
 

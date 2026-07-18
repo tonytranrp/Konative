@@ -41,6 +41,25 @@ CPMAddPackage(
   NAME spdlog
   GITHUB_REPOSITORY gabime/spdlog
   GIT_TAG v1.17.0
+  # SPDLOG_FMT_EXTERNAL_HO, not the similarly-named SPDLOG_FMT_EXTERNAL - this is spdlog's own real
+  # option (spdlog/CMakeLists.txt, "Use external fmt header-only library instead of bundled"), not
+  # a typo, and it is ARCHITECTURE.md section 4's own explicitly-named choice (see the spdlog/fmt
+  # table row there, which names this exact option string as the deliberate header-only setting).
+  # A prior review pass flagged this as a suspected unreviewed typo/regression by diffing against
+  # an earlier commit that had plain SPDLOG_FMT_EXTERNAL - that diff was real, but the conclusion
+  # was wrong: re-verified directly against the fetched spdlog v1.17.0 source
+  # (build/desktop-debug/_deps/spdlog-src/CMakeLists.txt) that SPDLOG_FMT_EXTERNAL_HO is a distinct,
+  # real, valid option (mutually exclusive with SPDLOG_FMT_EXTERNAL, not interchangeable with it) -
+  # setting it links spdlog against fmt::fmt-header-only instead of fmt::fmt. Do not "fix" this back
+  # to SPDLOG_FMT_EXTERNAL without re-reading this comment and ARCHITECTURE.md section 4 first.
+  #
+  # Real, still-open item this DOES surface: include/konative/core/CMakeLists.txt links fmt::fmt
+  # (compiled) for konative_core's own log.hpp, which is a different fmt target than the
+  # fmt::fmt-header-only this option makes spdlog use internally. Both currently coexist fine only
+  # because nothing yet links konative_core and spdlog together in the same binary (log.hpp's own
+  # comment: spdlog's android_logger_mt() sink is an explicit not-yet-done TODO). Resolve which fmt
+  # target konative_core should use for consistency WHEN that sink actually gets wired up, not
+  # speculatively now.
   OPTIONS "SPDLOG_FMT_EXTERNAL_HO ON"
 )
 
