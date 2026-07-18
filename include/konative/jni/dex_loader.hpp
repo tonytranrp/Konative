@@ -47,6 +47,78 @@ struct LoadedDexClass {
     GlobalRef<jobject> application;
 };
 
+namespace detail {
+
+// Opportunistically upgrades to a resource-aware effective loader if the embedded dex defines
+// com.konative.generated.KonativeResourceProvider (see that Kotlin class's own doc comment for
+// the full architectural reasoning - dalvik.system.InMemoryDexClassLoader is a FINAL class, so it
+// cannot be subclassed to add resource support directly; KonativeResourceProvider is instead a
+// plain java.lang.ClassLoader used as a SECOND InMemoryDexClassLoader's PARENT, relying on
+// ClassLoader.getResource()'s standard parent-first delegation). Deliberately quiet on the
+// expected "this dex doesn't define it" path (a plain ClassNotFoundException) - only
+// construction failures on a provider class that DOES exist are real, loggable problems. Returns
+// bootstrap_loader itself, unchanged, if no upgrade happened - never fails, never returns null.
+inline LocalRef<jobject> upgrade_to_resource_aware_loader(JNIEnv* env, jobject bootstrap_loader,
+                                                            jclass dex_loader_class, jmethodID dex_loader_ctor,
+                                                            jobject dex_buffer_for_upgrade,
+                                                            jobject real_parent_loader) {
+    LocalRef<jstring> provider_name(
+        env, env->NewStringUTF("com.konative.generated.KonativeResourceProvider"));
+    if (check_and_clear_exception(env, "NewStringUTF(KonativeResourceProvider)") || !provider_name) {
+        return LocalRef<jobject>(env, env->NewLocalRef(bootstrap_loader));
+    }
+
+    jclass loader_class = env->GetObjectClass(bootstrap_loader);
+    jmethodID load_class_method =
+        env->GetMethodID(loader_class, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+    env->DeleteLocalRef(loader_class);
+    LocalRef<jobject> provider_class(
+        env, env->CallObjectMethod(bootstrap_loader, load_class_method, provider_name.get()));
+    if (env->ExceptionCheck()) {
+        // Expected, quiet path: this dex simply doesn't define the provider (a plain
+        // ClassNotFoundException) - not an error, don't log it as one.
+        env->ExceptionClear();
+        return LocalRef<jobject>(env, env->NewLocalRef(bootstrap_loader));
+    }
+    if (!provider_class) {
+        return LocalRef<jobject>(env, env->NewLocalRef(bootstrap_loader));
+    }
+
+    // Found it - construct KonativeResourceProvider(realParentLoader), then a SECOND
+    // InMemoryDexClassLoader using that provider as ITS parent (not the real app classloader
+    // directly), so classes loaded through this second loader see the provider first via
+    // standard parent-first getResource() delegation.
+    jmethodID provider_ctor = env->GetMethodID(static_cast<jclass>(provider_class.get()), "<init>",
+                                                 "(Ljava/lang/ClassLoader;)V");
+    if (check_and_clear_exception(env, "GetMethodID(KonativeResourceProvider.<init>)") ||
+        provider_ctor == nullptr) {
+        core::log_error("konative::jni::upgrade_to_resource_aware_loader: KonativeResourceProvider "
+                         "found but has no (ClassLoader) constructor - using the plain loader "
+                         "instead");
+        return LocalRef<jobject>(env, env->NewLocalRef(bootstrap_loader));
+    }
+    LocalRef<jobject> provider_instance(
+        env, env->NewObject(static_cast<jclass>(provider_class.get()), provider_ctor, real_parent_loader));
+    if (check_and_clear_exception(env, "NewObject(KonativeResourceProvider)") || !provider_instance) {
+        core::log_error("konative::jni::upgrade_to_resource_aware_loader: KonativeResourceProvider "
+                         "construction failed - using the plain loader instead");
+        return LocalRef<jobject>(env, env->NewLocalRef(bootstrap_loader));
+    }
+    LocalRef<jobject> resource_aware_loader(
+        env, env->NewObject(dex_loader_class, dex_loader_ctor, dex_buffer_for_upgrade, provider_instance.get()));
+    if (check_and_clear_exception(env, "NewObject(InMemoryDexClassLoader, resource-aware)") ||
+        !resource_aware_loader) {
+        core::log_error("konative::jni::upgrade_to_resource_aware_loader: second "
+                         "InMemoryDexClassLoader construction failed - using the plain loader "
+                         "instead");
+        return LocalRef<jobject>(env, env->NewLocalRef(bootstrap_loader));
+    }
+    core::log_info("konative::jni::upgrade_to_resource_aware_loader: upgraded successfully");
+    return resource_aware_loader;
+}
+
+} // namespace detail
+
 inline core::Result<LoadedDexClass, DexLoadError> load_class_from_dex(
     JNIEnv* env, const unsigned char* dex_bytes, std::size_t dex_size,
     const char* fully_qualified_class_name) {
@@ -100,6 +172,23 @@ inline core::Result<LoadedDexClass, DexLoadError> load_class_from_dex(
         return ErrResult::err(DexLoadError::DexClassLoaderConstructionFailed);
     }
 
+    // Step 3.5: opportunistically upgrade to a resource-aware effective loader if the embedded dex
+    // defines com.konative.generated.KonativeResourceProvider (see
+    // detail::upgrade_to_resource_aware_loader's own doc comment) - gives real
+    // java.util.ServiceLoader-dependent libraries (kotlinx-coroutines' Main dispatcher being the
+    // concrete, reproduced case; ARCHITECTURE.md section 6.6) a working
+    // getResource()/getResourceAsStream() even though InMemoryDexClassLoader itself never
+    // provides one. A second, independent direct ByteBuffer over the same bytes - NOT dex_buffer
+    // reused - since dex_buffer is already associated with dex_class_loader.
+    LocalRef<jobject> dex_buffer_for_upgrade(
+        env, env->NewDirectByteBuffer(const_cast<unsigned char*>(dex_bytes), static_cast<jlong>(dex_size)));
+    if (check_and_clear_exception(env, "NewDirectByteBuffer(for upgrade)") || !dex_buffer_for_upgrade) {
+        return ErrResult::err(DexLoadError::ByteBufferCreationFailed);
+    }
+    LocalRef<jobject> effective_loader = detail::upgrade_to_resource_aware_loader(
+        env, dex_class_loader.get(), dex_loader_class.get(), ctor, dex_buffer_for_upgrade.get(),
+        parent_loader.get());
+
     // Step 4: ClassLoader.loadClass(String) via reflection, NOT env->FindClass() - see this file's
     // own top comment for why FindClass can't see this class. loadClass wants Java source-style
     // dotted names, unlike FindClass's slash-separated internal names.
@@ -108,7 +197,7 @@ inline core::Result<LoadedDexClass, DexLoadError> load_class_from_dex(
         return ErrResult::err(DexLoadError::ClassNotFoundInDex);
     }
     LocalRef<jobject> loaded_obj(
-        env, call_instance_method<jobject>(env, dex_class_loader.get(), "loadClass",
+        env, call_instance_method<jobject>(env, effective_loader.get(), "loadClass",
                                             "(Ljava/lang/String;)Ljava/lang/Class;", class_name.get()));
     if (!loaded_obj) {
         core::log_error("konative::jni::load_class_from_dex: loadClass failed for {}",

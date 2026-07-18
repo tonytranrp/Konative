@@ -10,6 +10,9 @@ class R {
         const val accessibility_action_clickable_span: Int = 0x7f0d1000
         const val tag_accessibility_actions: Int = 0x7f0d1001
         const val tag_accessibility_clickable_spans: Int = 0x7f0d1002
+        const val tag_compat_insets_dispatch: Int = 0x7f0d102a
+        const val tag_on_apply_window_listener: Int = 0x7f0d102b
+        const val tag_window_insets_animation_callback: Int = 0x7f0d102c
         const val tag_accessibility_heading: Int = 0x7f0d1003
         const val tag_accessibility_pane_title: Int = 0x7f0d1004
         const val tag_on_receive_content_listener: Int = 0x7f0d1005

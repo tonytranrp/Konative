@@ -5,14 +5,18 @@ The real Kotlin+Compose source that gets compiled, dexed, and embedded into `kon
 the actual functional example the whole framework exists to produce: everything past
 `src/platform/android/jni_onload.cpp`'s one `CallStaticVoidMethod` handoff runs from here.
 
+**This is real, working, and verified on real hardware** — see Status below for the actual
+screenshot proof, not just a compile-clean claim.
+
 ## Hard rules
 
-- **Never built by Gradle/AGP.** Compiled by Konative's own `kotlinc`+Compose-compiler-plugin+`d8`
-  CMake pipeline (see `cmake/modules/` once that pipeline lands — as of this file's writing it is
-  still a hand-run scratchpad recipe, not yet automated; see `ARCHITECTURE.md` section 6.7's status
-  table). `testapp/`'s Gradle build never sees these `.kt` files at all — that module owns exactly
-  one file, `testapp/app/src/main/java/com/konative/testapp/MainActivity.kt`, and nothing here may
-  ever be added to it.
+- **Never built by Gradle/AGP.** Compiled by Konative's own `kotlinc`+Compose-compiler-plugin+`d8`/
+  `r8` pipeline (see `cmake/modules/` once the CMake automation lands — as of this file's writing
+  it is still a hand-run recipe, fully reproducible but not yet wired into CMake; see
+  `ARCHITECTURE.md` section 6.7's status table). `testapp/`'s Gradle build never sees these `.kt`
+  files at all — that module owns exactly one file,
+  `testapp/app/src/main/java/com/konative/testapp/MainActivity.kt`, and nothing here may ever be
+  added to it.
 - **`com.konative.generated.KonativeEntryPoint`'s `@JvmStatic install(Application)` is the ONLY
   contract `jni_onload.cpp` depends on** (exact signature:
   `(Landroid/app/Application;)V`, looked up via `GetStaticMethodID`/`CallStaticVoidMethod`). Don't
@@ -33,8 +37,31 @@ the actual functional example the whole framework exists to produce: everything 
   doesn't need; use `androidx.compose.foundation.text.BasicText` + a manual `TextStyle` instead of
   `material3.Text`/`MaterialTheme`. A real app embedding this framework can add material3 back —
   just be aware of the real, measured size cost (see Status below).
+- **One flat `src/com/konative/generated/` package tree**, matching the fixed
+  `com.konative.generated` package `jni_onload.cpp` looks up by name — don't introduce a deeper
+  package hierarchy without a real reason (unlike `include/konative/**`'s deep C++ folder nesting
+  convention, there's no equivalent reason for depth here: this is one small, tightly-coupled
+  module, not a large multi-domain library).
+- **`r8-rules.pro` (this folder) must be passed to `r8` via `--pg-conf` on every real build.**
+  Every rule in it exists because of a specific, real, on-device-reproduced failure (see that
+  file's own comments) — this is not a generic boilerplate proguard file, and skipping it will
+  reproduce bugs this project has already found and fixed once.
+- **`r_shim/` is a stopgap, not a design** — see that folder's own `README.md`. Don't add a new
+  file there without first confirming, by decompiling the real referencing bytecode
+  (`javap` against the actual dependency jar), which exact fields are needed. Guessing field names
+  or values here has real failure modes (see Status below for how many rounds this took even when
+  done carefully).
 
-## Status (2026-07-17) — real, on-device-attempted, not yet fully working
+## Status (2026-07-17) — real Compose UI, rendering, verified on real hardware
+
+**Real, on-device, screenshotted proof**: a green `Box` filling the screen with white "Konative"
+text — `KonativeRootComposable()`'s exact, real output — rendered on the rooted LDPlayer x86_64
+emulator via `com.konative.testapp`. This is the full chain working end to end: `System
+.loadLibrary()` → `JNI_OnLoad` → `verify_blob()` (SHA-256 self-check) → `load_class_from_dex()` →
+`upgrade_to_resource_aware_loader()` (`KonativeResourceProvider`, see below) →
+`KonativeEntryPoint.install(Application)` → `ActivityLifecycleCallbacks.onActivityCreated()` →
+`ComposeView` construction → real Jetpack Compose composition → real rendering — no OpenGL/EGL/
+Vulkan anywhere, exactly per this project's original design intent.
 
 `KonativeEntryPoint.kt` compiles cleanly against the real, Gradle-resolved AndroidX dependency
 closure (see `r_shim/README.md` for how that closure was determined and why `r_shim/` exists) and
@@ -42,52 +69,53 @@ R8-shrinks to a **single ~1.2-2.4MB `classes.dex`** (down from ~20MB/multidex un
 answers `research/jni_activity_bootstrap_research.md` section 5.3's previously-unmeasured
 embedded-blob-size risk: it's real, but shrinkable to something that fits Konative's current
 single-dex-buffer `load_class_from_dex()` comfortably, once Material3 is left out and R8 shrinking
-is used). Two real bugs were found and fixed by actually compiling/running this, not by review:
+is used).
+
+**Real bugs found and fixed by actually compiling/running this, not by review** (roughly in the
+order they were hit — each one was a real, reproduced on-device failure, not a hypothetical):
 
 1. `performRestore()`/`performSave()` belong on `SavedStateRegistryController`, not
    `LifecycleRegistry` — `research/jni_activity_bootstrap_research.md` section 5.2's own reference
    sketch had this wrong (it was never actually compiled before being written up).
-2. R8's default `--release` obfuscation (`-dontobfuscate` now set) made an on-device crash's error
-   message unreadable (`NoSuchFieldError` on a renamed one-letter class) — turning it off doesn't
-   fix anything by itself, but is necessary to read what's actually wrong. Also needed
-   `-dontoptimize` (a real, reproduced-twice `NoSuchMethodError` on `kotlin.collections.ArraysKt
-   .fill$default` inside `androidx.collection.MutableScatterMap`, surviving a `kotlin-stdlib`
-   version swap unchanged, went away only with R8's optimizer off — looks like an R8
-   optimizer bug/mismatch with this specific call shape, not investigated further; see
-   `combined_proguard.pro`-equivalent notes for exact repro details if reproducing this build by
-   hand).
+2. R8's default `--release` obfuscation made an on-device crash's error message unreadable
+   (`NoSuchFieldError` on a renamed one-letter class) — `-dontobfuscate` doesn't fix anything by
+   itself, but is necessary to read what's actually wrong (see `r8-rules.pro`).
+3. `~7` genuinely missing `R$id`/`R$string` classes (no AAPT2 step in this hand-rolled pipeline) —
+   `r_shim/`, each field verified against real decompiled bytecode, not guessed.
+4. A real, reproduced-twice `NoSuchMethodError` on `kotlin.collections.ArraysKt.fill$default`
+   inside `androidx.collection.MutableScatterMap`, surviving a `kotlin-stdlib` version swap
+   unchanged — an R8 optimizer bug/mismatch with this specific call shape, worked around with
+   `-dontoptimize` (not root-caused further; see `r8-rules.pro`).
+5. **The `Dispatchers.Main` blocker** (previously the last known blocker, now solved) — two
+   distinct causes, both real, both required for the fix:
+   - `dalvik.system.InMemoryDexClassLoader` loads bytecode from a raw byte buffer with no JAR/ZIP
+     resource backing, so `ClassLoader.getResource()`/`getResourceAsStream()` always return
+     nothing for a dex-loaded class. Fixed architecturally: `KonativeResourceProvider` (a plain
+     `ClassLoader`, NOT an `InMemoryDexClassLoader` subclass — that class is `final`, a real
+     compile-time-verified constraint an earlier draft hit directly) is used as a SECOND
+     `InMemoryDexClassLoader`'s parent, so `ClassLoader.getResource()`'s standard parent-first
+     delegation finds this provider's synthetic `META-INF/services/*` entries before falling
+     through to the (always-empty) dex-based lookup. `src/platform/android/jni_onload.cpp`'s
+     `load_class_from_dex()` bootstraps this opportunistically - see `dex_loader.hpp`'s
+     `detail::upgrade_to_resource_aware_loader()`.
+   - **Correction to this doc's own earlier claim**: it previously said *both* of
+     `kotlinx-coroutines`'s Main-dispatcher-discovery paths need resource lookup. An independent
+     verification pass decompiled `FastServiceLoader.loadMainDispatcherFactory$kotlinx_coroutines_core()`
+     further than the original diagnosis had and found that on a real Android device
+     (`ANDROID_DETECTED == true`, always true here), the "fast" path uses a hardcoded
+     `Class.forName("kotlinx.coroutines.android.AndroidDispatcherFactory", ...)` — a plain class
+     lookup needing no resources at all, only for the class to actually be **present**. It wasn't:
+     R8 had silently shrunk away the entire `kotlinx.coroutines.android` package (and, separately,
+     `KonativeResourceProvider` itself) since neither is referenced anywhere in the static call
+     graph — only reachable via reflection, exactly like `KonativeEntryPoint.install()` already
+     was. Both needed explicit `-keep` rules (`r8-rules.pro`) - the resource-provider fix alone did
+     not solve the crash; the keep rules alone (tested independently) also did not solve it. Both
+     were required together for the confirmed-working combination.
 
-**Current, real, on-device blocker, precisely diagnosed, not yet solved**: `ComposeView`
-initialization unconditionally constructs a `FontFamilyResolver` (`androidx.compose.ui.text.font
-.FontFamilyResolverImpl`), which touches `kotlinx.coroutines.Dispatchers.Main`. Both of
-`kotlinx-coroutines`'s Main-dispatcher-discovery paths (`FastServiceLoader` and the plain
-`java.util.ServiceLoader` fallback — confirmed by decompiling `kotlinx.coroutines.internal
-.MainDispatcherLoader` directly) need classloader **resource** lookup
-(`META-INF/services/kotlinx.coroutines.internal.MainDispatcherFactory`), not just class lookup.
-`dalvik.system.InMemoryDexClassLoader` loads compiled bytecode from a raw byte buffer with **no
-JAR/ZIP resource backing at all** — there is no mechanism for `ClassLoader.getResource(...)` to
-find anything for a dex-blob-loaded class, regardless of R8 settings. Real on-device result:
-`java.lang.IllegalStateException: Module with the Main dispatcher is missing`, thrown from
-`MainDispatcherLoader.<clinit>`, crashing `ComposeView` attachment.
-
-**This is an architecture-level gap in the loader mechanism itself, not something fixable from
-Kotlin source or `r8` flags.** The real fix is one of:
-- Extend `konative::jni::load_class_from_dex()`/the embed mechanism to ALSO serve
-  `META-INF/services/*`-style resource lookups (e.g. a custom `ClassLoader` subclass wrapping
-  `InMemoryDexClassLoader` that answers `findResource`/`findResources` from a small resource table
-  embedded alongside the dex bytes) — the architecturally "real" fix, matching how a real APK's
-  own classloader already does this.
-- Avoid any AndroidX/Kotlin library that relies on `ServiceLoader`-style discovery in the embedded
-  module entirely (fragile long-term — this could recur with other libraries, not just
-  `kotlinx-coroutines`, and Compose's `FontFamilyResolver` can't be avoided from application code).
-
-Not yet attempted; flagged here precisely so a future iteration doesn't have to
-re-diagnose this from scratch.
-- **One flat `src/com/konative/generated/` package tree**, matching the fixed
-  `com.konative.generated` package `jni_onload.cpp` looks up by name — don't introduce a deeper
-  package hierarchy without a real reason (unlike `include/konative/**`'s deep C++ folder nesting
-  convention, there's no equivalent reason for depth here: this is one small, tightly-coupled
-  module, not a large multi-domain library).
+No known blockers remain for this proof-of-concept's scope. Real, still-open, lower-priority items:
+the R8 optimizer bug in item 4 above (worked around, not root-caused), a real CMake automation for
+this whole pipeline (still hand-run), and `r_shim/`'s own stated stopgap status (a real AAPT2 step
+would remove the need for it).
 
 ## Adding to this folder
 
@@ -97,4 +125,7 @@ following ordinary Kotlin/Compose idioms (this folder is not bound by
 to the C++ core in `include/konative/**` and `src/**`, not to this JVM Kotlin module). Keep
 `ComposeHostOwner` and `KonativeEntryPoint` together in one file, matching
 `research/jni_activity_bootstrap_research.md` section 5.2's validated reference design, unless a
-real second consumer of `ComposeHostOwner` justifies splitting it out.
+real second consumer of `ComposeHostOwner` justifies splitting it out. If a new dependency's own
+classes get shrunk away by R8 despite being needed at runtime (reflection-only usage, exactly like
+`KonativeEntryPoint`/`KonativeResourceProvider`/`kotlinx.coroutines.android.**`), add a targeted
+`-keep` to `r8-rules.pro` with a comment citing the real crash/evidence - don't guess preemptively.

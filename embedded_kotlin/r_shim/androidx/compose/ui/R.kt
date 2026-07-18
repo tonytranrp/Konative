@@ -13,6 +13,7 @@ class R {
     object id {
         const val androidx_compose_ui_view_compose_view_context: Int = 0x7f0d1fff
         const val androidx_compose_ui_view_composition_context: Int = 0x7f0d1ffe
+        const val compose_view_saveable_id_tag: Int = 0x7f0d1ffd
         const val hide_in_inspector_tag: Int = 0x7f0d2000
         const val auto_clear_focus_behavior_tag: Int = 0x7f0d2001
         const val inspection_slot_table_set: Int = 0x7f0d2002
