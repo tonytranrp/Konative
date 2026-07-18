@@ -75,10 +75,67 @@
 # --- Real, reproduced on-device crash: java.lang.NoSuchMethodError on kotlin.collections.ArraysKt
 # .fill$default([J)V, thrown from androidx.collection.MutableScatterMap.initializeStorage/<init>.
 # Reproduced identically against BOTH kotlin-stdlib 2.1.20 and 2.4.0 (ruling out a version
-# mismatch), and reproduces with or without the resource-provider class present - genuinely an R8
-# optimizer bug/mismatch with this specific bridge-method call shape, not investigated further.
-# TODO for whoever builds the real CMake automation: bisect via fine-grained -optimizations flags
-# rather than this blanket one, if the size savings from full optimization turn out to matter. ---
+# mismatch), and reproduces with or without the resource-provider class present.
+#
+# ROOT CAUSE, now real and understood (2026-07-18, re-confirmed live on-device the same day the
+# fix search below was exhausted - see the project-konative-autonomous-loop memory log for the full
+# investigation): Kotlin compiles top-level file functions as an inheritance chain of "part"
+# classes topped by an essentially-empty public facade (kotlin.collections.ArraysKt extends
+# ArraysKt___ArraysKt extends ... extends ArraysKt__ArraysJVMKt) - real callers address the facade
+# by name, and the JVM/ART resolves the call via ordinary static-method-via-superclass lookup, not
+# reflection. fill$default(long[], long, int, int, int, Object) - a real, 6-parameter synthetic
+# default-argument bridge, confirmed byte-identical across stdlib 2.1.20 and 2.4.0 - is actually
+# declared several classes up that chain. Because this pipeline feeds kotlin-stdlib.jar to R8 as
+# full PROGRAM input (not --lib - see KonativeCompileKotlinDex.cmake's r8 invocation), R8's
+# whole-program optimizer is free to (and does) PHYSICALLY MATERIALIZE a specialized copy of
+# fill$default directly onto the facade class itself, with its signature stripped down based on
+# constant-argument propagation across whatever call sites R8's analysis reaches - confirmed via
+# direct javap/dexdump diff of optimized-vs-dontoptimize builds: the materialized copy on the
+# facade drops to `fill$default(long[])`, with the real fill-value/fromIndex/toIndex/mask/marker
+# args baked in as constants and inlined straight through to java.util.Arrays.fill. This collides
+# with MutableScatterMap.initializeStorage's own (unmodified, ordinary, non-reflective) call to the
+# facade, which still expects the real 6-arg form and gets NoSuchMethodError instead. A second,
+# structurally identical, currently-non-fatal instance of the same mechanism was found live the
+# same day: KonativeResourceProvider's <clinit> hits `IllegalAccessError` calling
+# kotlin.collections.MapsKt__MapsJVMKt.mapCapacity via the MapsKt facade - silently caught by this
+# framework's own `upgrade_to_resource_aware_loader` fallback (logs "found but has no (ClassLoader)
+# constructor - using the plain loader instead"), so it doesn't crash, but confirms this isn't a
+# fill()-specific fluke - it's systemic to how this R8 version's optimizer treats Kotlin's
+# multi-file-facade pattern under full whole-program optimization.
+#
+# NARROWER FIX SEARCH - exhaustive on this toolchain (R8 8.9.27), all failed, don't re-attempt
+# these without a genuinely different R8 version:
+#   - `-keep` on the callee only (kotlin.collections.ArraysKt*) - the real 6-arg method survives,
+#     but R8 ALSO still materializes a second, mutilated copy on the facade, and the real call site
+#     still resolves to that one.
+#   - `-keep` on the caller only (androidx.collection.**) - call site still resolves to a mutilated
+#     facade method regardless.
+#   - `-keep` on BOTH ends simultaneously, fully - still fails the same way.
+#   - `-neverinline` (targeting the same two methods) - not a valid standalone directive in this R8
+#     version's pg-conf grammar at all: `Error ... Unknown option "-neverinline"`. Confirmed by
+#     directly decompiling R8 8.9.27's own config-directive parser
+#     (com/android/tools/r8/shaking/n3.class inside r8.jar) - `-neverinline`/`-noverticalclassmerging`/
+#     `-nohorizontalclassmerging` strings exist inside the R8 binary (likely reserved for R8's newer
+#     source-annotation-based "keepanno" mechanism, not applicable to a precompiled dependency like
+#     kotlin-stdlib) but are not accepted tokens in the actual pg-conf grammar this version parses.
+#   - `-optimizations !class/merging/vertical,!class/merging/horizontal,!method/inlining/*` (the
+#     genuinely-documented ProGuard/R8 fine-grained-pass syntax) - accepted syntactically, but R8
+#     prints `Ignoring option: -optimizations` and produces byte-identical output to omitting it
+#     entirely. This R8 version implements -optimizations as a compatibility no-op, not a real pass
+#     gate - the ORIGINAL version of this comment's own TODO ("bisect via fine-grained -optimizations
+#     flags") is a dead end as literally written; don't retry it without confirming a different R8
+#     build actually wires this flag to something.
+# Only one distinct R8 build (8.9.27, same hash) was found anywhere on this machine across two
+# separate SDK-root locations - cross-testing a genuinely different R8 release, or checking
+# issuetracker.google.com's r8 component for a known/already-fixed report, needs internet access
+# and a different R8 install this investigation didn't have.
+#
+# -dontoptimize remains the only mechanism on this toolchain that reliably prevents this - kept
+# deliberately, not as an unexamined default. It costs real inlining/constant-folding across the
+# whole embedded module (not just this one interaction), which is why it's worth someone
+# eventually re-testing against a different R8 release if the dex-size/perf cost ever matters
+# enough to justify the investigation - but per the search above, don't re-try the same four
+# directions without new information (a different R8 build, or upstream tracker confirmation). ---
 -dontoptimize
 
 # --- kotlinx-coroutines-android's OWN bundled R8 rules (auto-applied by R8 from that library's own
