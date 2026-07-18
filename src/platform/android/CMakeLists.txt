@@ -1,40 +1,36 @@
-# Produces the single fused .so: android_native_app_glue's expected `android_main` entry point,
-# Konative's own C++ core, and the linked Kotlin/Native static lib that owns ALL rendering
-# (ARCHITECTURE.md section 6 - there is no C++ GLES/Vulkan backend, see render/README.md).
-# "One .so, rendering + app logic together" (ARCHITECTURE.md section 1).
-
-# android_native_app_glue.c ships as NDK *source*, not a prebuilt lib - every real CMake+NDK
-# project compiles it itself. Swap this for GameActivity's own replacement
-# (game-activity::game-activity_static) if the ARCHITECTURE.md section 6.1 NativeActivity/GameActivity
-# choice is later flipped - do not compile both at once.
-add_library(konative_native_app_glue STATIC
-  ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
-)
-target_include_directories(konative_native_app_glue PUBLIC
-  ${ANDROID_NDK}/sources/android/native_app_glue
-)
+# Produces the single fused .so: the JNI_OnLoad entry point (ARCHITECTURE.md section 6.4,
+# replacing the deleted android_main.cpp/android_native_app_glue design, section 6.1), Konative's
+# own C++ core, and the embedded, self-checking Kotlin+Compose dex blob (section 6.5/6.6) that owns
+# rendering. "One .so, rendering + app logic together" (ARCHITECTURE.md section 1).
+#
+# KONATIVE_EMBEDDED_DEX_PATH must point at a real classes.dex built by kotlinc+d8 (the automated
+# konative_embed_kotlin_dex()-style CMake pipeline described in section 6.6 doesn't exist yet - set
+# this manually to a dex built by hand in the meantime; see ARCHITECTURE.md section 6.7's status
+# table for exactly what's landed vs. still open).
+if(NOT KONATIVE_EMBEDDED_DEX_PATH)
+  message(FATAL_ERROR
+    "konative_app_native requires -DKONATIVE_EMBEDDED_DEX_PATH=<path to a real classes.dex> - "
+    "the automated kotlinc+d8 CMake pipeline (ARCHITECTURE.md section 6.6) doesn't exist yet, so "
+    "this must be built by hand for now (kotlinc -include-runtime -jvm-target 1.8 ... | d8 "
+    "--min-api 26 ...) and passed explicitly.")
+endif()
 
 add_library(konative_app_native SHARED
-  android_main.cpp
-  activity_bridge.cpp
-  looper_pump.cpp
+  jni_onload.cpp
 )
 
 target_link_libraries(konative_app_native PRIVATE
   konative::konative
-  konative::platform::android
-  konative_native_app_glue
+  konative::jni
+  konative::embed
   android
   log
 )
 
-if(TARGET konative::kotlin::app)
-  target_link_libraries(konative_app_native PRIVATE konative::kotlin::app)
-endif()
-
-# Required so the framework's own onAppCmd/android_main survive linking against a shared lib
-# built with -Wl,--gc-sections (the default for Release NDK builds) - matches the -u
-# ANativeActivity_onCreate flag every real NDK CMake+native_app_glue project needs.
-target_link_options(konative_app_native PRIVATE -u ANativeActivity_onCreate)
+konative_embed_binary_blob(konative_app_native
+  BLOB "${KONATIVE_EMBEDDED_DEX_PATH}"
+  SYMBOL konative_app_dex
+  VERIFY_SHA256
+)
 
 konative_apply_warnings(konative_app_native)

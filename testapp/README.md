@@ -36,12 +36,34 @@ means `testapp/` needs a real `Activity`, not the framework-provided `android.ap
 
 ```sh
 cd testapp
-./gradlew assembleDebug
+./gradlew assembleDebug -PkonativeEmbeddedDexPath=<path to a real classes.dex>
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 (A `gradle wrapper` run — or opening this folder in Android Studio once — is needed once to
 generate `gradlew`/`gradle/wrapper/gradle-wrapper.jar`; neither is vendored in this skeleton.)
+
+`-PkonativeEmbeddedDexPath` is required — it forwards straight through to
+`src/platform/android/CMakeLists.txt`'s `KONATIVE_EMBEDDED_DEX_PATH` (see that file's own
+`FATAL_ERROR` message if you omit it). The automated `kotlinc`+Compose-compiler-plugin+`d8` CMake
+pipeline that would produce this dex automatically (`ARCHITECTURE.md` section 6.6) doesn't exist
+yet, so until it lands, point this at a hand-built `classes.dex` containing a
+`com.konative.generated.KonativeEntryPoint` class with a `@JvmStatic install(Application)` static
+method (`src/platform/android/jni_onload.cpp` is what calls it). Can also be set via the
+`KONATIVE_EMBEDDED_DEX_PATH` environment variable instead of the Gradle property.
+
+Two more optional `-P`/env-var overrides exist for the same reason `CMakeUserPresets.json` exists
+for the standalone `cmake --preset` flow (see `BUILDING.md`) — machine-local escape hatches that
+never get committed as hardcoded paths:
+
+- `konativeNdkPath` / `KONATIVE_NDK_PATH` — points AGP directly at an already-installed NDK,
+  bypassing its SDK-manager-based auto-provisioning (which needs both a one-time interactive
+  `sdkmanager --licenses` run AND write access to the SDK's own install directory — fails outright
+  if the SDK lives somewhere admin-only, e.g. under `Program Files`).
+- `konativeGitExecutable` / `KONATIVE_GIT_EXECUTABLE` — `BUILDING.md`'s `-DGIT_EXECUTABLE=...`
+  git.cmd-shim workaround. A bare `-DGIT_EXECUTABLE=...` on the `gradle` command line does **not**
+  reach the CMake invocation AGP builds internally (that `-D` sets a JVM system property on the
+  Gradle daemon, nothing more) — it must go through this property instead.
 
 ## The on-device verification loop
 
@@ -51,11 +73,19 @@ the better first choice for debugging a failed load, since `run-as`/direct `/dat
 without restriction there).
 
 ```sh
-adb -s <device-serial> install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s <device-serial> install -t -r app/build/intermediates/apk/debug/app-debug.apk
 adb -s <device-serial> shell am start -n com.konative.testapp/.MainActivity
 adb -s <device-serial> logcat -s Konative:V AndroidRuntime:E ActivityManager:E   # confirm the .so loaded and the embedded module initialized
 adb -s <device-serial> exec-out screencap -p > konative_test.png                 # confirm the Compose UI actually rendered
 ```
+
+`app/build/intermediates/apk/debug/` (not the classic `app/build/outputs/apk/debug/`, which this
+AGP/Gradle version only leaves a redirect-pointer file in) is where the real APK actually lands —
+verified by building it for real, not assumed. `-t` is required: AGP marks debug builds `testOnly`
+by default and plain `adb install -r` refuses them. Prefer the client-side `adb install` shown
+above over `adb shell pm install` — the latter has been seen to fail with
+`INSTALL_FAILED_MEDIA_UNAVAILABLE: Failed to restorecon` on the LDPlayer emulator even with SELinux
+already permissive, while the streamed `adb install -t` path does not hit this.
 
 If `adb logcat` shows no `Konative` tag and no crash, the `.so` most likely failed to load, or
 loaded but failed to construct the `InMemoryDexClassLoader` (the framework's own self-check should
@@ -65,3 +95,11 @@ self-checking-loader design). Check `AndroidRuntime:E`/`ActivityManager:E` for a
 (framework-level failure, should be self-reported) to tell the two failure modes apart. On the
 rooted LDPlayer emulator, `adb root_shell` access lets you inspect `/data/data/com.konative.testapp/`
 directly if logcat alone isn't enough to diagnose a failure.
+
+**Verified end to end** (2026-07-17, LDPlayer x86_64 emulator): installed a real APK built by this
+exact Gradle flow, launched it, and confirmed via logcat that `JNI_OnLoad` ran, the embedded dex
+blob passed its SHA-256 self-check, `InMemoryDexClassLoader` loaded a real embedded class, and the
+reflective `install(Application)` handoff executed — `I Konative: KonativeEntryPoint.install()
+called for package=com.konative.testapp`, no crash, clean `ActivityTaskManager: Displayed`. Used a
+hand-built placeholder dex (see `-PkonativeEmbeddedDexPath` above), not the real Compose UI —
+that piece is still open (`ARCHITECTURE.md` §6.6).

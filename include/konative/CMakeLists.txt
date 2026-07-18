@@ -13,7 +13,6 @@ add_subdirectory(embed)
 add_subdirectory(app)
 if(ANDROID)
   add_subdirectory(jni)
-  add_subdirectory(platform/android)
 endif()
 add_subdirectory(render)
 

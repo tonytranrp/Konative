@@ -394,11 +394,13 @@ plugin>` invocation, real `javap`-verified bytecode, real `d8` output):
 |---|---|
 | `.incbin` blob embedder + build-time SHA-256 (`KonativeEmbedBlob.cmake`) | **Landed, verified on real arm64-v8a + x86_64 hardware** |
 | Runtime SHA-256 self-check (`include/konative/embed/checked_blob.hpp`) | **Landed, verified (desktop unit tests + real on-device round-trip)** |
-| `JNI_OnLoad` entry point | Designed (§6.4), not yet implemented |
-| Dex-loader (`InMemoryDexClassLoader` construction) | Designed (§6.6), not yet ported from `GameHub` |
+| Dex-loader (`InMemoryDexClassLoader` construction, `include/konative/jni/`) | **Landed, ported from `GameHub`** |
+| `JNI_OnLoad` entry point (`src/platform/android/jni_onload.cpp`) | **Landed** |
+| **Full `JNI_OnLoad` → `verify_blob()` → `load_class_from_dex()` → reflective `install(Application)` chain** | **Verified end-to-end on real hardware** (rooted LDPlayer x86_64 emulator, real installed APK, real logcat proof — `I Konative: KonativeEntryPoint.install() called for package=com.konative.testapp`, no crash, clean `ActivityTaskManager: Displayed`). Used a hand-built placeholder `classes.dex` (a real `com.konative.generated.KonativeEntryPoint` with a `@JvmStatic install(Application)` that just logs) since the automated Compose pipeline below doesn't exist yet — this proves the *mechanism*, not the eventual Compose UI. |
 | `kotlinc`+Compose-compiler-plugin+`d8` CMake pipeline | Designed (§6.6), validated manually once via scratchpad spike, not yet automated |
-| Embedded Kotlin+Compose source tree | Designed (§6.6/§6.4 step 3), not yet written |
-| `src/platform/android/{android_main,activity_bridge,looper_pump}.cpp` | **Dead code — scheduled for deletion**, not yet removed |
+| Embedded Kotlin+Compose source tree (the real `KonativeEntryPoint` that builds a `ComposeView`) | Designed (§6.6/§6.4 step 3), not yet written — the placeholder above only proves the loader mechanism, not Compose itself |
+| `src/platform/android/{android_main,activity_bridge,looper_pump}.cpp` + `include/konative/platform/android/` | **Removed** (superseded by `jni_onload.cpp` + `include/konative/jni/`) |
+| `testapp/`'s Gradle build (`app/build.gradle.kts`) | **Landed** — drives the real root `CMakeLists.txt` for `konative_app_native` end to end (CPM fetch, Android NDK cross-compile, `.incbin` embed, dex packaging), gated behind `-PkonativeEmbeddedDexPath=<path>` (see `testapp/README.md`) since the automated dex pipeline isn't wired up yet |
 | Kotlin/Native (`native/src/Renderer.kt`, EGL/GLES rendering) | **Fully superseded for rendering** — kept only as a historical record; do not extend |
 
 ---
@@ -574,22 +576,29 @@ a rooted LDPlayer x86_64 emulator as a second test device, both reachable via `a
 matching the `android-arm64`/`android-x86_64` CMake presets respectively):
 
 ```sh
-cd testapp && ./gradlew assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+cd testapp && ./gradlew assembleDebug -PkonativeEmbeddedDexPath=<path to a real classes.dex>
+adb install -t -r app/build/intermediates/apk/debug/app-debug.apk   # -t: debug builds are testOnly
 adb shell am start -n com.konative.testapp/com.konative.testapp.MainActivity
-adb logcat -s konative:V AndroidRuntime:E DEBUG:E
+adb logcat -s Konative:V AndroidRuntime:E DEBUG:E
 ```
 
-A silent `adb logcat` (no `konative` tag, no crash) most likely means the `.so` never finished
+(`app/build/intermediates/apk/debug/` — **not** the classic `app/build/outputs/apk/debug/` —
+is where this AGP/Gradle version actually writes the APK; `outputs/apk/` only holds a
+`createDebugApkListingFileRedirect` pointer file now. `-t` is required because AGP marks debug
+builds `testOnly` by default; plain `pm install -t` over `adb shell` has also been seen to fail with
+`INSTALL_FAILED_MEDIA_UNAVAILABLE: Failed to restorecon` on the LDPlayer emulator even with SELinux
+permissive — the client-side streamed `adb install -t` install path (used above) does not hit this.)
+
+A silent `adb logcat` (no `Konative` tag, no crash) most likely means the `.so` never finished
 loading — check `adb logcat *:E` for a dynamic-linker error before assuming anything about
 rendering. This loop is the concrete, executable version of §9's "get a trivial Compose UI to
-actually render, driven entirely by `JNI_OnLoad`" milestone — not yet exercised end to end as of
-this rewrite, since the `JNI_OnLoad`/dex-loader/Kotlin+Compose pieces §6.7 lists as still-open
-haven't landed yet. What *has* been verified on-device already (§6.5) is the lower-level embed
-mechanism the eventual `.so` will depend on — pushed and run directly via `adb push` +
-`adb shell` (not through an installed APK at all, since it's a standalone native smoke test, not
-part of `testapp/` — see `tests/README.md`'s and `examples/README.md`'s own rule that Android-only
-mechanisms don't belong in either folder).
+actually render, driven entirely by `JNI_OnLoad`" milestone — **exercised end to end for the first
+time** (real installed APK, real device, real logcat proof) using a hand-built placeholder dex, not
+the real Compose UI yet; see §6.7's status table for the exact scope of what that proves versus
+what's still open. What was verified on-device earlier (§6.5), before the `JNI_OnLoad` entry point
+existed, was only the lower-level embed mechanism in isolation — pushed and run directly via
+`adb push` + `adb shell`, not through an installed APK (see `tests/README.md`'s and
+`examples/README.md`'s own rule that Android-only mechanisms don't belong in either folder).
 
 ---
 

@@ -16,7 +16,24 @@ plugins {
 android {
     namespace = "com.konative.testapp"
     compileSdk = 36
+    // Pinned to the version actually installed under the SDK's build-tools/ - without this, AGP
+    // defaults to whatever version it considers "tested" for this AGP release (34 for AGP 8.5.2)
+    // and tries to auto-provision THAT one instead of reusing what's already there, hitting the
+    // same license/read-only-SDK wall as the NDK override above solves.
+    buildToolsVersion = "36.0.0"
     ndkVersion = "28.0.13004108"
+    // ndkVersion above is the portable declaration (matches CMakePresets.json's own android-* presets).
+    // AGP's own SDK-managed NDK provisioning needs a one-time interactive `sdkmanager --licenses`
+    // AND write access to the SDK install dir - on this machine the SDK lives under
+    // "Program Files (x86)" (admin-only, not writable by this build), so AGP's auto-provisioning
+    // path can't work here even after licenses are accepted elsewhere. Same escape hatch shape as
+    // konativeEmbeddedDexPath below: an optional local/uncommitted override, not a committed path.
+    //   ./gradlew assembleDebug -PkonativeNdkPath=<path to an already-installed NDK>
+    val ndkPathOverride = (project.findProperty("konativeNdkPath") as String?)
+        ?: System.getenv("KONATIVE_NDK_PATH")
+    if (ndkPathOverride != null) {
+        ndkPath = ndkPathOverride
+    }
 
     defaultConfig {
         applicationId = "com.konative.testapp"
@@ -45,11 +62,33 @@ android {
                 // being built out in a follow-up commit once the open Compose/self-checking
                 // research lands. Left OFF here deliberately until that lands, so this Gradle
                 // build doesn't silently try to compile the superseded path.
-                arguments(
+                val baseArgs = mutableListOf(
                     "-DKONATIVE_BUILD_EXAMPLES=OFF",
                     "-DKONATIVE_BUILD_TESTS=OFF",
                     "-DKONATIVE_BUILD_KOTLIN_NATIVE=OFF"
                 )
+                // src/platform/android/CMakeLists.txt hard-fails with a clear FATAL_ERROR if this
+                // isn't set (the automated kotlinc+Compose+d8 pipeline, ARCHITECTURE.md section 6.6,
+                // doesn't exist yet) - forwarded here, not re-validated, so there is exactly one
+                // place (CMake) that decides what counts as a valid path. Pass with:
+                //   ./gradlew assembleDebug -PkonativeEmbeddedDexPath=<path to a real classes.dex>
+                val dexPath = (project.findProperty("konativeEmbeddedDexPath") as String?)
+                    ?: System.getenv("KONATIVE_EMBEDDED_DEX_PATH")
+                if (dexPath != null) {
+                    baseArgs += "-DKONATIVE_EMBEDDED_DEX_PATH=$dexPath"
+                }
+                // BUILDING.md's documented git.cmd-shim workaround (CPM/FetchContent's internal
+                // `git rev-parse "HEAD^0"` breaks under an npm-installed git.cmd on Windows) -
+                // a bare `-DGIT_EXECUTABLE=...` on the `gradle` command line does NOT reach this
+                // CMake invocation (Gradle's own `-D` sets a JVM system property on the Gradle
+                // daemon, it is not forwarded to the external native build process) - must go
+                // through this same arguments() list like every other CMake define here.
+                val gitExecutable = (project.findProperty("konativeGitExecutable") as String?)
+                    ?: System.getenv("KONATIVE_GIT_EXECUTABLE")
+                if (gitExecutable != null) {
+                    baseArgs += "-DGIT_EXECUTABLE=$gitExecutable"
+                }
+                arguments(*baseArgs.toTypedArray())
                 targets("konative_app_native")
             }
         }
