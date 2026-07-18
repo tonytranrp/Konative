@@ -1,6 +1,6 @@
-# The Kotlin/Native side (ARCHITECTURE.md \xc2\xa76/\xc2\xa77) - compiled by kotlinc-native via
+# The Kotlin/Native side (ARCHITECTURE.md section 6/section 7) - compiled by kotlinc-native via
 # KonativeKotlinNative.cmake, never javac/kotlinc/d8 (that was the dex-embedding path this
-# project explicitly moved away from - see ARCHITECTURE.md \xc2\xa71 and research/research.md).
+# project explicitly moved away from - see ARCHITECTURE.md section 1 and research/research.md).
 #
 # No CINTEROP_DEF needed here: Kotlin/Native ships pre-built EGL/GLES2/GLES3/Android cinterop
 # bindings for every androidNative* target out of the box (platform.egl/platform.gles3/

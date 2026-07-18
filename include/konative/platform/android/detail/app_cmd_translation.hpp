@@ -4,7 +4,7 @@
 
 // Translates the glue layer's raw APP_CMD_* integers into calls on konative::app::Application -
 // kept as a single, small, honest switch rather than spread across the platform code, since this
-// is the ONE place the "which command means what" knowledge should live (ARCHITECTURE.md \xc2\xa76.1).
+// is the ONE place the "which command means what" knowledge should live (ARCHITECTURE.md section 6.1).
 namespace konative::platform::android::detail {
 
 // Mirrors the android_native_app_glue.h / GameActivity APP_CMD_* enum values - kept as a local

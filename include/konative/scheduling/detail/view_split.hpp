@@ -4,7 +4,7 @@
 #include <vector>
 
 // The sanctioned pattern for parallelizing EnTT view iteration, per EnTT's own maintainer
-// (entt::view::handle() gives an indexable, splittable range - see ARCHITECTURE.md \xc2\xa75). This
+// (entt::view::handle() gives an indexable, splittable range - see ARCHITECTURE.md section 5). This
 // helper only computes index-range slices; it does not know about entt::view or Taskflow, so it
 // stays reusable regardless of which scheduler consumes the slices.
 namespace konative::scheduling::detail {

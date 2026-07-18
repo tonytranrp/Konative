@@ -3,7 +3,7 @@
 struct ANativeWindow;
 
 // The flat, @CName-exported Kotlin/Native entry points the C++ core calls into
-// (ARCHITECTURE.md \xc2\xa76.3/\xc2\xa76.4). Rendering is owned entirely by native/src/Renderer.kt -
+// (ARCHITECTURE.md section 6.3/section 6.4). Rendering is owned entirely by native/src/Renderer.kt -
 // these three calls are the ONLY window/frame-lifecycle surface the C++ side needs, and this
 // header must stay that small: if a new Kotlin-side rendering capability needs a new entry
 // point, add ONE new flat @CName function + ONE new forward declaration here, never a
@@ -14,7 +14,7 @@ struct ANativeWindow;
 //   @CName("konative_render_on_window_destroyed")  fun onWindowDestroyed()
 //   @CName("konative_render_tick")                 fun onTick(deltaMs: Double)
 //
-// SPIKE THIS FIRST (ARCHITECTURE.md \xc2\xa76.3/\xc2\xa79): linking a Kotlin/Native static lib into an NDK
+// SPIKE THIS FIRST (ARCHITECTURE.md section 6.3/section 9): linking a Kotlin/Native static lib into an NDK
 // CMake C++ target has real, documented, unresolved community friction. Prove the link + a single
 // round-trip call works before relying on this boundary for anything beyond a smoke test.
 extern "C" {

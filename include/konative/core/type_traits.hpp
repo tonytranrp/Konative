@@ -3,7 +3,7 @@
 #include <concepts>
 #include <type_traits>
 
-// Shared C++20 concepts used across Konative's templates in place of SFINAE (ARCHITECTURE.md \xc2\xa72).
+// Shared C++20 concepts used across Konative's templates in place of SFINAE (ARCHITECTURE.md section 2).
 namespace konative::core {
 
 template <typename T>

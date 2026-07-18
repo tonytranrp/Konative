@@ -1,4 +1,4 @@
-# Konative is header-only-first (ARCHITECTURE.md \xc2\xa72): one INTERFACE library per module folder,
+# Konative is header-only-first (ARCHITECTURE.md section 2): one INTERFACE library per module folder,
 # each declaring its own headers via FILE_SET HEADERS (never file(GLOB_RECURSE ...) - CMake's own
 # docs warn against it, and it's a poor fit for the events/ folder specifically, which gains new
 # files constantly).

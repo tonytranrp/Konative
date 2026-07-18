@@ -6,7 +6,7 @@
 #include "konative/reflect/detail/registration_thunk.hpp"
 
 // The registration surface used to reflect a component type AND register its
-// emplace-into-registry thunk in one call - see ARCHITECTURE.md \xc2\xa73 for why both halves are
+// emplace-into-registry thunk in one call - see ARCHITECTURE.md section 3 for why both halves are
 // needed (entt::meta reflection alone is not enough for generic registry mutation).
 namespace konative::reflect {
 

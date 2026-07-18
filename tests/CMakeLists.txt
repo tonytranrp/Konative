@@ -1,4 +1,5 @@
 add_executable(konative_tests
+  main.cpp
   test_result.cpp
   test_events.cpp
 )

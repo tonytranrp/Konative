@@ -19,7 +19,7 @@ import platform.gles3.GL_COLOR_BUFFER_BIT
 import platform.gles3.glClear
 import platform.gles3.glClearColor
 
-// Owns the EGL context/surface + all GLES calls for the entire framework (ARCHITECTURE.md \xc2\xa76.2).
+// Owns the EGL context/surface + all GLES calls for the entire framework (ARCHITECTURE.md section 6.2).
 // include/konative/render/renderer.hpp (C++) only forwards window/tick events to the three
 // @CName functions below across the interop boundary - no EGL/GLES/Vulkan call may exist
 // anywhere on the C++ side (render/README.md, native/README.md).
@@ -34,7 +34,7 @@ import platform.gles3.glClearColor
 // library/src/androidNativeMain/kotlin/.../internal/egl.kt is the reference implementation to
 // port the eglChooseConfig/eglCreateContext/eglCreateWindowSurface sequence from below.
 //
-// UNPROVEN (ARCHITECTURE.md \xc2\xa79): this is the framework's single largest concentration of risk.
+// UNPROVEN (ARCHITECTURE.md section 9): this is the framework's single largest concentration of risk.
 // Egloo proves the EGL/GLES cinterop bindings compile and link for Android native targets: it
 // does NOT itself prove a JVM-free, NativeActivity-driven render loop end to end on a real
 // device - that validation is this project's own to do, via testapp/'s adb verification loop.
@@ -55,7 +55,7 @@ fun onWindowCreated(window: COpaquePointer?) {
     eglInitialize(display, null, null) // major/minor may be null per the EGL spec - we don't need the version.
     EglState.display = display
 
-    // TODO(spike, ARCHITECTURE.md \xc2\xa79): eglChooseConfig -> eglCreateContext ->
+    // TODO(spike, ARCHITECTURE.md section 9): eglChooseConfig -> eglCreateContext ->
     // eglCreateWindowSurface(display, config, nativeWindow as platform.egl.EGLNativeWindowType,
     // ...) -> eglMakeCurrent. Deliberately left unimplemented rather than guessed at: port this
     // sequence from Egloo's real, working egl.kt/EglCore.kt (see this file's own top comment for

@@ -2,7 +2,7 @@
 # input/). dispatcher.hpp is the single shared entt::dispatcher wrapper - it is NOT an event
 # itself. This split (one generic dispatcher, many small single-purpose event types) is the
 # dominant real-world pattern (Hazel, EnTT's own dispatcher, eventpp, tinyevents) - see
-# ARCHITECTURE.md \xc2\xa72. Never add a second event type to an existing header - a new event always
+# ARCHITECTURE.md section 2. Never add a second event type to an existing header - a new event always
 # means a new file.
 add_library(konative_events INTERFACE)
 add_library(konative::events ALIAS konative_events)

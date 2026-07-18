@@ -1,4 +1,4 @@
-// The real android_native_app_glue event loop (ARCHITECTURE.md \xc2\xa76.1) - dispatches APP_CMD_* to
+// The real android_native_app_glue event loop (ARCHITECTURE.md section 6.1) - dispatches APP_CMD_* to
 // konative::app::Application and window lifecycle to konative::render::Renderer, which forwards
 // into Kotlin/Native across the interop boundary (render/README.md - this file must never call
 // EGL/GLES/Vulkan directly, only konative::render::Renderer's three events).
@@ -53,7 +53,7 @@ void run_application(NativeAppHandle app_handle) {
     app_handle->userData = &state;
     app_handle->onAppCmd = handle_cmd;
 
-    // Fixed-step placeholder (ARCHITECTURE.md \xc2\xa79 - real frame timing belongs in a later pass,
+    // Fixed-step placeholder (ARCHITECTURE.md section 9 - real frame timing belongs in a later pass,
     // not this skeleton). timeout_millis=0 -> never blocks, so this is a busy poll loop for now.
     constexpr double kFixedDeltaMs = 16.0;
     bool running = true;

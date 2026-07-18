@@ -1,11 +1,11 @@
 # Produces the single fused .so: android_native_app_glue's expected `android_main` entry point,
 # Konative's own C++ core, and the linked Kotlin/Native static lib that owns ALL rendering
-# (ARCHITECTURE.md \xc2\xa76 - there is no C++ GLES/Vulkan backend, see render/README.md).
-# "One .so, rendering + app logic together" (ARCHITECTURE.md \xc2\xa71).
+# (ARCHITECTURE.md section 6 - there is no C++ GLES/Vulkan backend, see render/README.md).
+# "One .so, rendering + app logic together" (ARCHITECTURE.md section 1).
 
 # android_native_app_glue.c ships as NDK *source*, not a prebuilt lib - every real CMake+NDK
 # project compiles it itself. Swap this for GameActivity's own replacement
-# (game-activity::game-activity_static) if the ARCHITECTURE.md \xc2\xa76.1 NativeActivity/GameActivity
+# (game-activity::game-activity_static) if the ARCHITECTURE.md section 6.1 NativeActivity/GameActivity
 # choice is later flipped - do not compile both at once.
 add_library(konative_native_app_glue STATIC
   ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c

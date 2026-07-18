@@ -10,7 +10,7 @@
 // update()         - flush all queued event types once per frame (call from World::tick())
 //
 // Cross-thread posting does NOT enqueue directly onto this type - entt::dispatcher is not
-// internally thread-safe (ARCHITECTURE.md \xc2\xa75). Worker threads post through a concurrentqueue
+// internally thread-safe (ARCHITECTURE.md section 5). Worker threads post through a concurrentqueue
 // MPMC queue instead; exactly one thread (the frame thread) drains that queue into
 // Dispatcher::enqueue() before calling update().
 namespace konative::events {

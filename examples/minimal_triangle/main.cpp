@@ -1,5 +1,5 @@
 // The minimal reference app - see examples/minimal_triangle/CMakeLists.txt's own comment.
-// Genuinely load-bearing entry point (ARCHITECTURE.md \xc2\xa72), hence .cpp rather than .hpp.
+// Genuinely load-bearing entry point (ARCHITECTURE.md section 2), hence .cpp rather than .hpp.
 
 #include "konative/app/application.hpp"
 

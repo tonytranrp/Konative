@@ -1,4 +1,4 @@
-// Load-bearing (ARCHITECTURE.md \xc2\xa72): wraps the real android_native_app_glue ALooper_pollOnce
+// Load-bearing (ARCHITECTURE.md section 2): wraps the real android_native_app_glue ALooper_pollOnce
 // call, which android_native_app_glue.h's own `struct android_poll_source::process` contract
 // requires a real .c/.cpp translation unit to drive - see include/konative/platform/android/
 // looper_pump.hpp for why this is kept separate from activity_bridge.cpp.

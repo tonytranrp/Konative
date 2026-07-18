@@ -4,7 +4,7 @@
 # "wrap a toolchain step as custom commands producing a linkable IMPORTED target" shape),
 # generalized here into a reusable Konative-wide module rather than one project's narrow tool.
 #
-# See ARCHITECTURE.md \xc2\xa76.3: linking a Kotlin/Native static lib into an NDK CMake C++ target has
+# See ARCHITECTURE.md section 6.3: linking a Kotlin/Native static lib into an NDK CMake C++ target has
 # real, documented, UNRESOLVED community friction (libc++/libm symbol conflicts). This module
 # does not paper over that - it is the mechanism, not a guarantee it links cleanly. Verify with a
 # real spike on your pinned NDK + Kotlin/Native versions before relying on it.
@@ -56,7 +56,7 @@ function(konative_add_kotlin_native_module name)
     set(KN_KLIB "${KN_OUT_DIR}/${name}_cinterop.klib")
     add_custom_command(
       OUTPUT "${KN_KLIB}"
-      COMMAND "${CMAKE_COMMAND}" -E echo "Konative: cinterop for ${name} not yet wired - see KONATIVE_KOTLIN_NATIVE_TARGET / ARCHITECTURE.md \xc2\xa76.3"
+      COMMAND "${CMAKE_COMMAND}" -E echo "Konative: cinterop for ${name} not yet wired - see KONATIVE_KOTLIN_NATIVE_TARGET / ARCHITECTURE.md section 6.3"
       COMMENT "Konative: cinterop stub for ${name} (${ARG_CINTEROP_DEF})"
       VERBATIM)
     list(APPEND KN_CINTEROP_ARGS "-library" "${KN_KLIB}")

@@ -1,7 +1,7 @@
 #pragma once
 
 // Compiler/platform detection macros shared across every module's detail/ layer. Not part of the
-// public API - see ARCHITECTURE.md \xc2\xa72 for the detail/ convention (Boost/GLM/Hana all follow this
+// public API - see ARCHITECTURE.md section 2 for the detail/ convention (Boost/GLM/Hana all follow this
 // "namespace detail + folder detail/" split for the implementation a template can't hide behind a
 // .cpp boundary).
 

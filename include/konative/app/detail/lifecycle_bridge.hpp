@@ -8,7 +8,7 @@
 
 // Translates whichever platform glue is compiled in (platform/android's APP_CMD_* pump today;
 // a desktop harness later) into the platform-agnostic lifecycle events every Konative system
-// actually reacts to - see ARCHITECTURE.md \xc2\xa76.1.
+// actually reacts to - see ARCHITECTURE.md section 6.1.
 namespace konative::app::detail {
 
 inline void dispatch_started(konative::ecs::World& world) {

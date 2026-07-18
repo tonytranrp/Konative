@@ -46,3 +46,7 @@ testapp/local.properties
 testapp/gradle/wrapper/gradle-wrapper.jar
 testapp/gradlew
 testapp/gradlew.bat
+
+# CMake's own convention: machine-local preset overrides (real NDK/SDK/kotlinc paths for
+# whoever's actual dev machine this is) never get committed - see CMakeUserPresets.json itself.
+CMakeUserPresets.json

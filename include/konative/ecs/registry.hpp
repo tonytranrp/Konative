@@ -3,7 +3,7 @@
 #include <entt/entt.hpp>
 
 // A thin, intentional alias rather than a wrapping class - konative::ecs::Registry IS
-// entt::registry (ARCHITECTURE.md \xc2\xa73: "don't hand-roll what a good library already solves").
+// entt::registry (ARCHITECTURE.md section 3: "don't hand-roll what a good library already solves").
 // Konative code should still spell konative::ecs::Registry, not entt::registry directly, so the
 // indirection point exists if it's ever needed.
 namespace konative::ecs {

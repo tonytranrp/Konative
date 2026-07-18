@@ -6,7 +6,7 @@
 namespace konative::core {
 
 // A minimal Result<T, E>, preferred over exceptions at the Kotlin/Native <-> C++ boundary
-// (ARCHITECTURE.md \xc2\xa76.3) where an unwound C++ exception cannot safely cross a plain-C-ABI call.
+// (ARCHITECTURE.md section 6.3) where an unwound C++ exception cannot safely cross a plain-C-ABI call.
 template <typename T, typename E>
 class Result {
 public:

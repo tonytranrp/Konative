@@ -6,6 +6,13 @@ template-heavy header-only codebase).
 
 ## Hard rules
 
+- **`main.cpp` is the ONLY file that may define `DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN`.** doctest is
+  header-only but needs exactly one translation unit to instantiate its actual runtime
+  implementation (`Result`/`ExpressionDecomposer`/etc.) and provide `main()` — every other
+  `test_*.cpp` just plain `#include <doctest/doctest.h>` and defines `TEST_CASE`s. Forgetting this
+  produces a wall of `undefined symbol: doctest::...` linker errors with no compile-time warning
+  at all — verified directly (this is exactly the bug this project's own first real build attempt
+  caught).
 - **One `test_<module>.cpp` per module** (`test_result.cpp` for `core/result.hpp`,
   `test_events.cpp` for `events/`), mirroring `include/konative/`'s own folder-per-concern shape —
   don't batch unrelated modules' tests into one file, and don't split one module's tests across

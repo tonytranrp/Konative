@@ -12,7 +12,14 @@ every Konative-authored CMake module (`modules/`).
   the vendored file with a `file(DOWNLOAD ...)` bootstrap.
 - **Every `GIT_TAG` in `modules/KonativeDependencies.cmake` is an immutable tag or commit hash,
   never a branch name.** CPM's own issue tracker confirms offline mode silently breaks against a
-  moving branch ref even with a populated source cache.
+  moving branch ref even with a populated source cache. **Verify a new/changed tag actually exists**
+  (`git ls-remote --tags <repo-url>`) before committing it — this repo's own first real build
+  caught a fabricated `glaze` tag that never existed; see `BUILDING.md`.
+- **`CMAKE_POLICY_VERSION_MINIMUM` is set in every `CMakePresets.json` configure preset on
+  purpose** — some CPM-fetched dependencies declare a `cmake_minimum_required` floor below what
+  CMake 4.x still supports running at all (a hard configure error, not just a deprecation
+  warning, hit for real with `doctest`). Bump it if a new dependency needs an even lower floor;
+  never lower it back to fix a symptom without understanding why the error came back.
 - **`KonativeAndroidToolchain.cmake` reads the NDK toolchain file's own already-established cache
   variables (`ANDROID_ABI`) — it never re-derives ABI/API-level mapping independently.** If a new
   ABI needs support, add one more branch to its `if/elseif` chain, matching the NDK's own naming,

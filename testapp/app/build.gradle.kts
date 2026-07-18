@@ -1,6 +1,6 @@
 // See testapp/README.md before editing this file. externalNativeBuild points at the REPO ROOT
 // CMakeLists.txt (not a copy) - this Gradle module never owns its own C++/CMake sources, it only
-// drives the same build ARCHITECTURE.md \xc2\xa77 already documents, via Gradle's own CMake invocation
+// drives the same build ARCHITECTURE.md section 7 already documents, via Gradle's own CMake invocation
 // instead of a standalone `cmake --preset`.
 //
 // The Kotlin Android plugin is here ONLY for MainActivity.kt (a single System.loadLibrary() call,

@@ -1,7 +1,7 @@
 # Derives the Kotlin/Native `-target` value from the NDK toolchain file's OWN already-established
 # cache variables (ANDROID_ABI) instead of re-deriving ABI/API-level mapping independently - the
 # same pattern corrosion's FindRust.cmake uses for Rust target triples and GameHub's own
-# KotlinNative.cmake uses for its `gamehub_kotlin_native_target_for_abi()`. See ARCHITECTURE.md \xc2\xa77.
+# KotlinNative.cmake uses for its `gamehub_kotlin_native_target_for_abi()`. See ARCHITECTURE.md section 7.
 #
 # kotlinc-native's target names for Android are lower-level than the Gradle/KMP-facing ones
 # (android_arm64, not androidNativeArm64) - using the Gradle name fails with "Unknown target".

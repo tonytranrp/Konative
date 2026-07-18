@@ -1,4 +1,4 @@
-# The Kotlin/Native <-> C++ C-ABI boundary - ARCHITECTURE.md \xc2\xa76.3, the single highest-uncertainty
+# The Kotlin/Native <-> C++ C-ABI boundary - ARCHITECTURE.md section 6.3, the single highest-uncertainty
 # module in the whole framework. Real, documented, unresolved community friction exists for this
 # exact combination (libc++/libm symbol conflicts) - this module is scaffolding for a spike, not a
 # proven-working bridge yet.

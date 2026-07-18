@@ -1,6 +1,6 @@
 # Shared warning/visibility flags for every first-party Konative target.
 #
-# CMAKE_CXX_VISIBILITY_PRESET=hidden matches ARCHITECTURE.md \xc2\xa76.3's explicit-exports-only
+# CMAKE_CXX_VISIBILITY_PRESET=hidden matches ARCHITECTURE.md section 6.3's explicit-exports-only
 # stance for the Kotlin/Native <-> C++ boundary: symbol visibility must be controlled
 # deliberately on both sides of that boundary, not left to compiler defaults.
 

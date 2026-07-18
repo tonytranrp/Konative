@@ -1,5 +1,5 @@
 // The native entry point android_native_app_glue's own glue thread calls once the process has
-// bootstrapped (ARCHITECTURE.md \xc2\xa76.1). This is intentionally the ONLY genuinely load-bearing
+// bootstrapped (ARCHITECTURE.md section 6.1). This is intentionally the ONLY genuinely load-bearing
 // translation unit for the whole Android app target - everything it calls into lives in
 // include/konative/**.hpp.
 
