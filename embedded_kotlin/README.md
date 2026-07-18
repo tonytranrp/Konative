@@ -47,11 +47,14 @@ screenshot proof, not just a compile-clean claim.
   Every rule in it exists because of a specific, real, on-device-reproduced failure (see that
   file's own comments) — this is not a generic boilerplate proguard file, and skipping it will
   reproduce bugs this project has already found and fixed once.
-- **`r_shim/` is a stopgap, not a design** — see that folder's own `README.md`. Don't add a new
-  file there without first confirming, by decompiling the real referencing bytecode
-  (`javap` against the actual dependency jar), which exact fields are needed. Guessing field names
-  or values here has real failure modes (see Status below for how many rounds this took even when
-  done carefully).
+- **Real AndroidX resource IDs (`R$id`/`R$string`/`R$attr`/etc.) are generated at build time by a
+  real `aapt2 compile`+`link` step** (`KonativeCompileKotlinDex.cmake`'s Step 1.5), not hand-shimmed
+  — the old `embedded_kotlin/r_shim/` stopgap this bullet used to describe is deleted, fully
+  replaced. `KONATIVE_AAPT2_AAR_DIR` must point at a directory of the real, unmodified `.aar` files
+  (not just their extracted `classes.jar` — those carry no `res/` content) for the same dependency
+  set `KONATIVE_KOTLIN_CLASSPATH_DIR` resolves; see Status below for how this directory is currently
+  assembled, and for what this step does and does not fix (real ID *values*, not a real
+  `resources.arsc` *table* — see the callout below).
 
 ## Status (2026-07-17) — real Compose UI, rendering, verified on real hardware
 
@@ -65,8 +68,9 @@ emulator via `com.konative.testapp`. This is the full chain working end to end: 
 Vulkan anywhere, exactly per this project's original design intent.
 
 `KonativeEntryPoint.kt` compiles cleanly against the real, Gradle-resolved AndroidX dependency
-closure (see `r_shim/README.md` for how that closure was determined and why `r_shim/` exists) and
-R8-shrinks to a **single ~1.2-2.4MB `classes.dex`** (down from ~20MB/multidex unshrunk — this
+closure (see the 2026-07-18 update below for how that closure's real `.aar` files, not just their
+extracted jars, get assembled) and R8-shrinks to a **single ~1.2-2.4MB `classes.dex`** (down from
+~20MB/multidex unshrunk — this
 answers `research/jni_activity_bootstrap_research.md` section 5.3's previously-unmeasured
 embedded-blob-size risk: it's real, but shrinkable to something that fits Konative's current
 single-dex-buffer `load_class_from_dex()` comfortably, once Material3 is left out and R8 shrinking
@@ -82,7 +86,9 @@ order they were hit — each one was a real, reproduced on-device failure, not a
    (`NoSuchFieldError` on a renamed one-letter class) — `-dontobfuscate` doesn't fix anything by
    itself, but is necessary to read what's actually wrong (see `r8-rules.pro`).
 3. `~7` genuinely missing `R$id`/`R$string` classes (no AAPT2 step in this hand-rolled pipeline) —
-   `r_shim/`, each field verified against real decompiled bytecode, not guessed.
+   worked around at the time with `r_shim/`, a hand-shimmed stopgap, each field verified against
+   real decompiled bytecode, not guessed. **Superseded 2026-07-18** — see the update below; `r_shim/`
+   no longer exists, real AAPT2-linked values are generated at build time instead.
 4. A real, reproduced-twice `NoSuchMethodError` on `kotlin.collections.ArraysKt.fill$default`
    inside `androidx.collection.MutableScatterMap`, surviving a `kotlin-stdlib` version swap
    unchanged — an R8 optimizer bug/mismatch with this specific call shape, worked around with
@@ -113,14 +119,67 @@ order they were hit — each one was a real, reproduced on-device failure, not a
      not solve the crash; the keep rules alone (tested independently) also did not solve it. Both
      were required together for the confirmed-working combination.
 
-No known blockers remain for this proof-of-concept's scope. Real, still-open, lower-priority items:
-the R8 optimizer bug in item 4 above (worked around, not root-caused), and `r_shim/`'s own stated
-stopgap status (a real AAPT2 step would remove the need for it). The CMake automation for this
-whole pipeline has landed (`cmake/modules/KonativeEmbedKotlinDex.cmake`) — verified via both a
-direct `cmake --build` and a real `./gradlew assembleDebug`, both rendering correctly on-device; it
-surfaced one more reflection-stripped-by-R8 class (`androidx.compose.ui.platform.
-LifecycleRetainedValuesStoreOwner`, fixed in `r8-rules.pro`, same category as item 5 below) that
-the hand-run recipe's own classpath snapshot had never hit.
+No known blockers remain for this proof-of-concept's current scope (real Compose UI renders
+correctly, see below). Real, still-open, lower-priority item: the R8 optimizer bug in item 4 above
+(worked around, not root-caused). The CMake automation for this whole pipeline has landed
+(`cmake/modules/KonativeEmbedKotlinDex.cmake`) — verified via both a direct `cmake --build` and a
+real `./gradlew assembleDebug`, both rendering correctly on-device; it surfaced one more
+reflection-stripped-by-R8 class (`androidx.compose.ui.platform.LifecycleRetainedValuesStoreOwner`,
+fixed in `r8-rules.pro`, same category as item 5 above) that the hand-run recipe's own classpath
+snapshot had never hit.
+
+## Update (2026-07-18) — real AAPT2 resource linking landed; `r_shim/` deleted; a deeper, separate gap found and documented, not fixed
+
+**`r_shim/`'s hand-shimmed placeholder `R$id`/`R$string`/etc. classes are gone, fully replaced by a
+real `aapt2 compile`+`link` step** (`KonativeCompileKotlinDex.cmake`'s new Step 1.5, between kotlinc
+and r8): for every real `.aar` in `KONATIVE_AAPT2_AAR_DIR` (the same 12-library dependency closure
+this module actually uses — Compose runtime/ui/ui-graphics/foundation/foundation-layout, activity,
+lifecycle-runtime/viewmodel, savedstate, core, core-viewtree, customview-poolingcontainer), `res/` is
+extracted and `aapt2 compile`d, each `.aar`'s own real package name is read directly from its
+(plain-text) `AndroidManifest.xml`, then one `aapt2 link` (against `KONATIVE_ANDROID_JAR`, a 3-line
+static manifest, `--extra-packages` for every library) produces real `R.java` for the whole closure
+at once, which `javac` compiles straight into the same classes directory kotlinc already populated —
+r8's existing dexing step needed zero changes. **Real, measured cost: ~0.35s** (negligible next to
+kotlinc/r8's own per-build time). Verified three ways before landing: a real `cmake --build` (the
+new step's own `-- konative: aapt2-linked real R classes for ...` log line lists all 11 real package
+names it linked), a fresh root-push deploy to the rooted LDPlayer emulator (identical, correct
+Compose UI render, clean logcat, no `NoSuchFieldError`/crash), and a full desktop-debug rebuild+test
+run (unchanged, Android-only change).
+
+**What this fully and correctly fixes**: the entire actual problem `r_shim/` existed to solve — every
+field is now a real, mechanically-derived AAPT2 value instead of a hand-guessed placeholder, with
+zero manual `javap`-decompile-per-field work needed going forward, and it catches fields the reactive
+crash-driven process hadn't found yet (this repo's own research surfaced two already-latent,
+not-yet-shimmed fields already needed by classes present in the current shipped dex —
+`androidx.compose.ui.R$id.consume_window_insets_tag`, one window-insets-padding composable away from
+being hit, and `androidx.activity.R$id.view_tree_on_back_pressed_dispatcher_owner`, one predictive-back
+touch away).
+
+**What this does NOT fix — a real, separate, more serious problem, found while researching this fix,
+deliberately NOT papered over here**: fields ultimately backed by `Resources.getString(int)` (and by
+extension `R$style`/`R$styleable`/`R$dimen`/etc., which need a real, populated `resources.arsc` table
+behind the runtime `Resources` object, not just a correct integer) still will not resolve at true
+runtime — because neither this embedded module nor `testapp/`'s own real APK packages any `res/`
+content at all. **This is not hypothetical**: direct `javap` disassembly confirms
+`AndroidComposeViewAccessibilityDelegateCompat.class` (a real class already present in the current
+shipped, R8-shrunk dex) calls `Resources.getString(R.string.tab)` / `Resources.getString(R.string
+.switch_role)` — the exact two fields `r_shim/` used to hand-shim under the mistaken assumption they
+were safe `View.setTag()`-style tag keys. They are not: the call will throw
+`Resources.NotFoundException` the instant a `Role.Tab`/`Role.Switch` semantics node needs an
+accessibility description (e.g. TalkBack active, or any `Tab`/`Switch`-role composable) — a live bug
+in the current demo's own dependency closure, not a future risk. **R8 cannot catch this class of bug
+the way it catches a missing class/field**: the class and field both compile and link fine; the
+failure only ever appears as a runtime exception in a specific interaction state.
+
+Fixing this needs a real, deliberate decision this update does NOT make unilaterally: either
+`testapp/`'s own `build.gradle.kts` declares these AndroidX dependencies for real (letting AGP's
+normal resource merge/link produce a real backing `resources.arsc` in `testapp`'s own installed
+APK, since the dex-loaded code runs inside that APK's real `Activity`/`Application` `Context` —
+`Resources` resolution has nothing to do with which `ClassLoader` loaded the calling class) — which
+sits in real tension with `testapp/README.md`'s own Hard Rule that its Gradle/AGP plugin exists ONLY
+to compile the one loader `.kt` file — or some other, not-yet-researched mechanism for the dex-loaded
+module to carry its own resource table. Tracked here explicitly so it doesn't silently get lost; not
+attempted in this update.
 
 ## Adding to this folder
 

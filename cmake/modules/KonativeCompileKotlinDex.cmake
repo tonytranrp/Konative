@@ -8,7 +8,8 @@
 foreach(_required
     KONATIVE_KOTLINC KONATIVE_COMPOSE_PLUGIN KONATIVE_KOTLIN_STDLIB_JAR KONATIVE_R8 KONATIVE_ANDROID_JAR
     KONATIVE_CLASSPATH_DIR KONATIVE_PG_CONF KONATIVE_MIN_API KONATIVE_SOURCES
-    KONATIVE_GEN_DIR KONATIVE_DEX_FILE)
+    KONATIVE_GEN_DIR KONATIVE_DEX_FILE
+    KONATIVE_AAPT2 KONATIVE_JAVAC KONATIVE_AAPT2_AAR_DIR)
   if(NOT DEFINED ${_required})
     message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: ${_required} must be passed via -D")
   endif()
@@ -94,6 +95,143 @@ endif()
 file(GLOB_RECURSE _class_files "${_classes_dir}/*.class")
 if(NOT _class_files)
   message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: kotlinc produced zero .class files in ${_classes_dir}")
+endif()
+
+# --- Step 1.5: aapt2, real resource-ID linking - replaces embedded_kotlin/r_shim/'s hand-shimmed
+# placeholder R$id/R$string/etc. classes with real, AAPT2-assigned values, compiled straight into
+# ${_classes_dir} so Step 2's R8 invocation picks them up with no changes of its own.
+#
+# Why this exists: published AndroidX AARs ship R.txt with every value as a literal placeholder
+# 0x0 (real IDs are assigned per-final-app by AAPT2's link step; there is no "real" value to copy),
+# and no AAR's classes.jar contains a compiled R.class at all (real or placeholder) - confirmed by
+# direct inspection. r_shim/ used to hand-guess self-consistent replacement values instead, one
+# field at a time, only after an on-device crash - this step derives real values mechanically,
+# up front, for the whole dependency closure at once (real, reproduced repro: 0.35s for all 12
+# libraries below, see the research this is based on).
+#
+# What this DOES fix: build-time/classload-time correctness (R8 "missing class"/NoSuchFieldError) -
+# the entire, actual problem r_shim/ was built to solve. What this does NOT fix (deliberately, not
+# an oversight - see embedded_kotlin/README.md's Status section for the full writeup): fields
+# ultimately backed by Resources.getString()/a real resources.arsc table (R$string/R$style/
+# R$styleable/etc.) still won't resolve at true runtime, because neither this embedded module nor
+# testapp/'s own APK packages any res/ content - that is a separate, deeper, deliberately-deferred
+# problem needing a real decision about testapp/'s own resource-packaging scope, not something to
+# silently paper over here.
+file(GLOB _aapt2_aars "${KONATIVE_AAPT2_AAR_DIR}/*.aar")
+if(NOT _aapt2_aars)
+  message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: no .aar files found in KONATIVE_AAPT2_AAR_DIR (${KONATIVE_AAPT2_AAR_DIR})")
+endif()
+
+set(_aapt2_extract_dir "${KONATIVE_GEN_DIR}/aapt2_extract")
+set(_aapt2_compiled_dir "${KONATIVE_GEN_DIR}/aapt2_compiled")
+set(_aapt2_link_dir "${KONATIVE_GEN_DIR}/aapt2_link")
+file(REMOVE_RECURSE "${_aapt2_extract_dir}" "${_aapt2_compiled_dir}" "${_aapt2_link_dir}")
+file(MAKE_DIRECTORY "${_aapt2_extract_dir}" "${_aapt2_compiled_dir}" "${_aapt2_link_dir}")
+
+set(_aapt2_compiled_zips "")
+set(_aapt2_packages "")
+foreach(_aar IN LISTS _aapt2_aars)
+  get_filename_component(_aar_name "${_aar}" NAME_WE)
+  set(_aar_extract_dir "${_aapt2_extract_dir}/${_aar_name}")
+  file(MAKE_DIRECTORY "${_aar_extract_dir}")
+  file(ARCHIVE_EXTRACT INPUT "${_aar}" DESTINATION "${_aar_extract_dir}")
+
+  # A real, published AAR's own top-level AndroidManifest.xml is plain text (unlike a built APK's
+  # compiled binary XML) - confirmed by direct inspection - so package="..." is a real, mechanically
+  # extractable string every time, not a value to hand-maintain in a lookup table.
+  if(NOT EXISTS "${_aar_extract_dir}/AndroidManifest.xml")
+    message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: ${_aar} has no AndroidManifest.xml after extraction")
+  endif()
+  file(STRINGS "${_aar_extract_dir}/AndroidManifest.xml" _aapt2_manifest_line REGEX "package=\"[^\"]*\"" LIMIT_COUNT 1)
+  string(REGEX MATCH "package=\"([^\"]*)\"" _aapt2_pkg_match "${_aapt2_manifest_line}")
+  if(NOT CMAKE_MATCH_1)
+    message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: could not find package=\"...\" in ${_aar}'s AndroidManifest.xml")
+  endif()
+  list(APPEND _aapt2_packages "${CMAKE_MATCH_1}")
+
+  if(NOT EXISTS "${_aar_extract_dir}/res")
+    # Real and legitimate, not an error: some AARs carry no res/ folder (e.g. metadata-only or
+    # pure-Kotlin artifacts) - nothing to compile for this one, its package name is still collected
+    # above in case another AAR's own resources reference it.
+    continue()
+  endif()
+  set(_aapt2_compiled_zip "${_aapt2_compiled_dir}/${_aar_name}.zip")
+  execute_process(
+    COMMAND "${KONATIVE_AAPT2}" compile --dir "${_aar_extract_dir}/res" -o "${_aapt2_compiled_zip}"
+    RESULT_VARIABLE _aapt2_compile_result
+    OUTPUT_VARIABLE _aapt2_compile_output
+    ERROR_VARIABLE _aapt2_compile_error
+  )
+  if(NOT _aapt2_compile_result EQUAL 0)
+    message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: aapt2 compile failed for ${_aar} (exit ${_aapt2_compile_result}):\n${_aapt2_compile_output}\n${_aapt2_compile_error}")
+  endif()
+  list(APPEND _aapt2_compiled_zips "${_aapt2_compiled_zip}")
+endforeach()
+
+if(NOT _aapt2_compiled_zips)
+  message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: none of the AARs in KONATIVE_AAPT2_AAR_DIR (${KONATIVE_AAPT2_AAR_DIR}) had a res/ folder - nothing for aapt2 to link")
+endif()
+
+# aapt2 link's --min-sdk-version/--target-sdk-version flags fully substitute for a real
+# <uses-sdk> - empirically confirmed via a standalone repro (omitting <uses-sdk> entirely from a
+# 3-line manifest still linked cleanly) - so no manifest templating/merging is needed here.
+set(_aapt2_manifest "${KONATIVE_GEN_DIR}/aapt2_manifest/AndroidManifest.xml")
+file(WRITE "${_aapt2_manifest}" "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"com.konative.generated\"></manifest>\n")
+
+string(REGEX MATCH "android-([0-9]+)" _aapt2_api_match "${KONATIVE_ANDROID_JAR}")
+if(NOT CMAKE_MATCH_1)
+  message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: could not determine a target API level from KONATIVE_ANDROID_JAR (${KONATIVE_ANDROID_JAR}) - expected a .../platforms/android-<N>/android.jar path")
+endif()
+set(_aapt2_target_api "${CMAKE_MATCH_1}")
+
+list(JOIN _aapt2_packages ":" _aapt2_extra_packages)
+execute_process(
+  COMMAND "${KONATIVE_AAPT2}" link
+          -I "${KONATIVE_ANDROID_JAR}"
+          --manifest "${_aapt2_manifest}"
+          -o "${_aapt2_link_dir}/linked.apk"
+          --java "${_aapt2_link_dir}/java"
+          --output-text-symbols "${_aapt2_link_dir}/R.txt"
+          --extra-packages "${_aapt2_extra_packages}"
+          --auto-add-overlay
+          --min-sdk-version "${KONATIVE_MIN_API}"
+          --target-sdk-version "${_aapt2_target_api}"
+          ${_aapt2_compiled_zips}
+  RESULT_VARIABLE _aapt2_link_result
+  OUTPUT_VARIABLE _aapt2_link_output
+  ERROR_VARIABLE _aapt2_link_error
+)
+if(NOT _aapt2_link_result EQUAL 0)
+  message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: aapt2 link failed (exit ${_aapt2_link_result}):\n${_aapt2_link_output}\n${_aapt2_link_error}")
+endif()
+
+file(GLOB_RECURSE _aapt2_java_files "${_aapt2_link_dir}/java/*.java")
+if(NOT _aapt2_java_files)
+  message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: aapt2 link reported success but produced zero R.java files under ${_aapt2_link_dir}/java")
+endif()
+
+# No -bootclasspath: confirmed by direct inspection that aapt2's generated R.java files have zero
+# android.* imports (they're pure nested classes of int/String constants) - a real, reproduced
+# javac error ("option --boot-class-path not allowed with target 17") when it was included, since
+# -bootclasspath is only valid when cross-compiling to an OLDER -source/-target than the running
+# JDK's own implicit default, which these files have no need to do.
+execute_process(
+  COMMAND "${KONATIVE_JAVAC}" -d "${_classes_dir}" ${_aapt2_java_files}
+  RESULT_VARIABLE _aapt2_javac_result
+  OUTPUT_VARIABLE _aapt2_javac_output
+  ERROR_VARIABLE _aapt2_javac_error
+)
+if(NOT _aapt2_javac_result EQUAL 0)
+  message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: javac failed compiling aapt2-generated R classes (exit ${_aapt2_javac_result}):\n${_aapt2_javac_output}\n${_aapt2_javac_error}")
+endif()
+
+message(STATUS "konative: aapt2-linked real R classes for ${_aapt2_extra_packages}")
+
+# Re-glob now that Step 1.5 has added the real R*.class files alongside kotlinc's own output -
+# Step 2 below dexes everything in ${_classes_dir} in one pass, real R classes included.
+file(GLOB_RECURSE _class_files "${_classes_dir}/*.class")
+if(NOT _class_files)
+  message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: ${_classes_dir} is unexpectedly empty after kotlinc+aapt2/javac")
 endif()
 
 # --- Step 2: r8, shrink + dex in one pass (not d8 - a naive d8-dexed full Compose+lifecycle+

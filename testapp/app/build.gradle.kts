@@ -104,6 +104,23 @@ android {
                 if (kotlinClasspathDir != null) {
                     baseArgs += "-DKONATIVE_KOTLIN_CLASSPATH_DIR=$kotlinClasspathDir"
                 }
+                // aapt2/javac - real resource-ID linking (KonativeCompileKotlinDex.cmake's Step 1.5),
+                // replacing embedded_kotlin/r_shim/'s old hand-shimmed placeholder R classes.
+                val aapt2 = (project.findProperty("konativeAapt2") as String?)
+                    ?: System.getenv("KONATIVE_AAPT2")
+                if (aapt2 != null) {
+                    baseArgs += "-DKONATIVE_AAPT2=$aapt2"
+                }
+                val javac = (project.findProperty("konativeJavac") as String?)
+                    ?: System.getenv("KONATIVE_JAVAC")
+                if (javac != null) {
+                    baseArgs += "-DKONATIVE_JAVAC=$javac"
+                }
+                val aapt2AarDir = (project.findProperty("konativeAapt2AarDir") as String?)
+                    ?: System.getenv("KONATIVE_AAPT2_AAR_DIR")
+                if (aapt2AarDir != null) {
+                    baseArgs += "-DKONATIVE_AAPT2_AAR_DIR=$aapt2AarDir"
+                }
                 // BUILDING.md's documented git.cmd-shim workaround (CPM/FetchContent's internal
                 // `git rev-parse "HEAD^0"` breaks under an npm-installed git.cmd on Windows) -
                 // a bare `-DGIT_EXECUTABLE=...` on the `gradle` command line does NOT reach this

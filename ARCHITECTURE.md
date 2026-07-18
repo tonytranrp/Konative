@@ -434,13 +434,24 @@ class does declare the no-arg constructor R8 was stripping.
   step 1 and step 3): `GameHub/libs/jni/src/dex_loader.cpp`'s already-proven
   `getClassLoader()`→`NewDirectByteBuffer`→`InMemoryDexClassLoader`→`loadClass()`-via-reflection
   sequence, already ported into `include/konative/jni/dex_loader.hpp` (§6.7).
-- **A second, real gap the hand-rolled pipeline surfaced**: this pipeline has no AAPT2
+- **A second, real gap the hand-rolled pipeline surfaced — since fixed, with one deeper gap found
+  and documented, not fixed, along the way (2026-07-18)**: this pipeline originally had no AAPT2
   resource-linking step, so several AndroidX libraries' own `R$id`/`R$string` classes (real
   resource-ID constants those libraries need, e.g. for `View.setTag()`-based owner attachment)
-  don't exist. Worked around for now with hand-written stand-ins
-  (`embedded_kotlin/r_shim/`, see that folder's own README) — not a permanent design, a real
-  AAPT2-based fix is still needed; the now-landed CMake automation (below) does not add one, it
-  just automates the same recipe `r_shim/` was already validated against.
+  didn't exist — worked around at the time with hand-written stand-ins (`embedded_kotlin/r_shim/`).
+  **A real AAPT2-based fix has since landed** (`KonativeCompileKotlinDex.cmake`'s Step 1.5: `aapt2
+  compile`+`link` against the real dependency AARs, `javac`-compiled straight into the classes R8
+  already dexes) — `r_shim/` is deleted, fully replaced, verified via a real build plus a fresh
+  on-device deploy with no regression. This fully solves the build-time/classload-time correctness
+  problem `r_shim/` existed for. **It does NOT solve a separate, deeper problem found while building
+  it**: fields backed by `Resources.getString()`/a real `resources.arsc` table (`R$string`/`R$style`/
+  `R$styleable`) still won't resolve at true runtime, since neither this module nor `testapp/`'s own
+  APK packages any `res/` content — confirmed via `javap` that a class already in the current shipped
+  dex (`AndroidComposeViewAccessibilityDelegateCompat`) makes exactly this kind of call on exactly
+  the two fields `r_shim/` used to shim, a live not-yet-triggered bug, not a hypothetical. See
+  `embedded_kotlin/README.md`'s 2026-07-18 update for the full writeup and why the real fix needs a
+  deliberate decision about `testapp/`'s own resource-packaging scope, not something to redefine
+  silently as a side effect of this fix.
 
 ### 6.7 Status: what's landed vs. still open, as of this rewrite
 
@@ -454,7 +465,8 @@ class does declare the no-arg constructor R8 was stripping.
 | `KonativeResourceProvider` (`embedded_kotlin/`) — resource lookup for a dex-loaded `ClassLoader` | **Landed, verified on real hardware** — see §6.6 |
 | `kotlinc`+Compose-compiler-plugin+`r8` CMake pipeline (`KonativeEmbedKotlinDex.cmake`) | **Landed and verified** — real `cmake --build` and real `./gradlew assembleDebug`, both rendering correctly on-device (§6.6) |
 | Embedded Kotlin+Compose source tree (`embedded_kotlin/KonativeEntryPoint`) | **Landed and rendering on real hardware** — real screenshot proof (§6.6), no known blockers remaining for this proof-of-concept's scope |
-| AAPT2 resource linking for the embedded dex (`R$id`/`R$string` for AndroidX deps) | **Not implemented** — hand-shimmed as a stopgap (`embedded_kotlin/r_shim/`), not a real fix |
+| AAPT2 resource linking for the embedded dex (real `R$id`/`R$string`/etc. values) | **Landed and verified** — `KonativeCompileKotlinDex.cmake` Step 1.5, replaces the deleted `embedded_kotlin/r_shim/` stopgap entirely (§6.6) |
+| Runtime `resources.arsc` backing for `Resources.getString()`-class fields (`R$string`/`R$style`/`R$styleable`) | **Not implemented — a real, live, not-yet-triggered bug** (§6.6). Needs a deliberate decision about `testapp/`'s resource-packaging scope; higher priority than its "nice to have" framing before this was found |
 | `src/platform/android/{android_main,activity_bridge,looper_pump}.cpp` + `include/konative/platform/android/` | **Removed** (superseded by `jni_onload.cpp` + `include/konative/jni/`) |
 | `testapp/`'s Gradle build (`app/build.gradle.kts`) | **Landed** — drives the real root `CMakeLists.txt` for `konative_app_native` end to end (CPM fetch, Android NDK cross-compile, automated Kotlin+Compose dex build, `.incbin` embed, dex packaging); `-PkonativeEmbeddedDexPath=<path>` (see `testapp/README.md`) remains available as a manual override, no longer required |
 | Kotlin/Native (`native/src/Renderer.kt`, EGL/GLES rendering) | **Fully superseded for rendering** — kept only as a historical record; do not extend |

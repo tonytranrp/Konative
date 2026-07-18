@@ -48,21 +48,28 @@
 -dontwarn android.view.HardwareCanvas
 -dontwarn android.view.DisplayListCanvas
 
-# --- androidx.core.content.res.FontResourcesParserCompat's XML custom-font-family parsing path
-# needs androidx.core.R$styleable (real AAPT2-linked attribute arrays), which this hand-rolled
-# pipeline has no AAPT2 step to generate. Not shimmed (unlike the R$id/R$string tag-key shims in
-# embedded_kotlin/r_shim/) because a styleable int[] needs real, correctly-ordered attribute
-# indices to be meaningful, not just present - a wrong shim here would be worse than an honest
-# dontwarn. Safe to suppress: this trivial demo references no custom XML font-family resources, so
-# this codepath is genuinely unreachable, not just unlikely. ---
+# --- HISTORICAL (as of 2026-07-18, likely redundant, not yet re-verified by removing it):
+# androidx.core.content.res.FontResourcesParserCompat's XML custom-font-family parsing path needs
+# androidx.core.R$styleable (real AAPT2-linked attribute arrays). Originally added because this
+# hand-rolled pipeline had no AAPT2 step at all, and the hand-shimmed embedded_kotlin/r_shim/
+# stopgap deliberately did NOT shim R$styleable (a styleable int[] needs real, correctly-ordered
+# attribute indices to be meaningful, not just present - a wrong shim would be worse than an honest
+# dontwarn). KonativeCompileKotlinDex.cmake's Step 1.5 now generates a REAL, correctly-ordered
+# androidx.core.R$styleable via real aapt2 link (androidx.core is part of KONATIVE_AAPT2_AAR_DIR's
+# dependency set) - this dontwarn is very likely dead code now, since the class it was suppressing
+# an unresolvable reference to now genuinely exists. Left in place rather than removed this pass
+# (harmless either way - r8 silently ignores a non-matching -dontwarn pattern) since removing and
+# re-verifying it is a separate, low-priority cleanup, not proven done. ---
 -dontwarn androidx.core.R$styleable
 
 # --- Kept for readable crash diagnostics, not because obfuscation itself caused a bug: an actual
 # on-device crash (java.lang.NoSuchFieldError on a renamed one-letter class) was originally
 # unreadable with default --release obfuscation on. Turning it off surfaced the real, readable
-# field name, which turned out to be a genuinely missing embedded_kotlin/r_shim/ field (this
-# hand-rolled pipeline has no real AAPT2 resource linking) - now added. Kept off going forward
-# since this pipeline has no reason to obfuscate a not-yet-shipped proof-of-concept anyway. ---
+# field name, which turned out to be a genuinely missing field - at the time worked around by hand
+# in the now-deleted embedded_kotlin/r_shim/ stopgap (this hand-rolled pipeline had no real AAPT2
+# resource linking yet - it does now, see KonativeCompileKotlinDex.cmake's Step 1.5). Kept off
+# going forward since this pipeline has no reason to obfuscate a not-yet-shipped proof-of-concept
+# anyway. ---
 -dontobfuscate
 
 # --- Real, reproduced on-device crash: java.lang.NoSuchMethodError on kotlin.collections.ArraysKt

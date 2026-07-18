@@ -5,12 +5,15 @@
 #
 # Two ways to supply the embedded dex, in priority order:
 #   1. -DKONATIVE_EMBEDDED_DEX_PATH=<path to a real classes.dex> - manual override, e.g. a dex
-#      built by hand, or a machine without kotlinc/r8 installed at all (a from-source CI checkout).
-#   2. Automated (default): konative_embed_kotlin_dex() compiles embedded_kotlin/src + r_shim at
-#      BUILD time via the real, hand-validated kotlinc+r8 recipe (embedded_kotlin/README.md's
-#      Status section) - requires KONATIVE_KOTLINC/KONATIVE_R8/KONATIVE_ANDROID_JAR/
-#      KONATIVE_KOTLIN_CLASSPATH_DIR to be set (CMakeUserPresets.json, same machine-local-override
-#      pattern as ANDROID_NDK_HOME).
+#      built by hand, or a machine without kotlinc/r8/aapt2 installed at all (a from-source CI
+#      checkout).
+#   2. Automated (default): konative_embed_kotlin_dex() compiles embedded_kotlin/src at BUILD time
+#      via the real, hand-validated kotlinc+aapt2+r8 recipe (embedded_kotlin/README.md's Status
+#      section) - requires KONATIVE_KOTLINC/KONATIVE_R8/KONATIVE_ANDROID_JAR/KONATIVE_AAPT2/
+#      KONATIVE_JAVAC/KONATIVE_KOTLIN_CLASSPATH_DIR/KONATIVE_AAPT2_AAR_DIR to be set
+#      (CMakeUserPresets.json, same machine-local-override pattern as ANDROID_NDK_HOME). Real
+#      AAPT2-linked resource classes replace embedded_kotlin/r_shim/'s old hand-shimmed
+#      placeholders - see embedded_kotlin/README.md for what this does and does not fix.
 add_library(konative_app_native SHARED
   jni_onload.cpp
 )
@@ -32,7 +35,6 @@ if(KONATIVE_EMBEDDED_DEX_PATH)
 else()
   file(GLOB_RECURSE _konative_app_kt_sources CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../embedded_kotlin/src/*.kt"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../embedded_kotlin/r_shim/*.kt"
   )
   konative_embed_kotlin_dex(konative_app_native
     SOURCES ${_konative_app_kt_sources}
