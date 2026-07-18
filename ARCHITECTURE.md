@@ -22,8 +22,14 @@
 > §6.7's status table states exactly what's landed vs. what's still genuinely open (a separate,
 > deeper runtime gap around `Resources.getString()`-backed resource fields, needing a real decision
 > about `testapp/`'s own scope — not a stopgap needing more engineering, a decision needing the
-> project owner). See the `project-konative-autonomous-loop` memory entry for the full
-> iteration-by-iteration history.
+> project owner). **A terminology note worth being honest about**: every "verified on real hardware"
+> claim above, up through the R8 investigation, was verified on the rooted LDPlayer x86_64 *emulator*
+> — "real hardware" meant "a real running Android OS instance reachable via `adb`," not literally
+> non-emulated silicon. That distinction stopped being hypothetical on 2026-07-18: the full current
+> pipeline was verified, for the first time, on an actual physical device (`R3GL10AHL7P`,
+> Galaxy-S24-class, `arm64-v8a`) via a real `./gradlew assembleDebug` run producing one universal APK
+> — see §13 and `testapp/README.md`. See the `project-konative-autonomous-loop` memory entry for the
+> full iteration-by-iteration history.
 
 This document is the synthesized design for Konative: a CMake/C++ framework combining Kotlin and
 C++ into **one native Android `.so`** — rendering and app logic together. Everything below is
@@ -645,34 +651,38 @@ something `NativeActivity` categorically cannot provide), whose companion-object
 `System.loadLibrary("konative_app_native")` and nothing else. Every bit of `onCreate`/content-view
 behavior originates from that `.so`'s `JNI_OnLoad`, not from `MainActivity.kt` itself.
 
-**The verification loop** (a physical device — a Galaxy-S24-class phone, API 36, `arm64-v8a` — plus
-a rooted LDPlayer x86_64 emulator as a second test device, both reachable via `adb`/`deepadb`,
-matching the `android-arm64`/`android-x86_64` CMake presets respectively):
+**The verification loop** (a physical device — a Galaxy-S24-class phone, `R3GL10AHL7P`, API 36,
+`arm64-v8a` — plus a rooted LDPlayer x86_64 emulator as a second test device, both reachable via
+`adb`/`deepadb`, matching the `android-arm64`/`android-x86_64` CMake presets respectively):
 
 ```sh
-cd testapp && ./gradlew assembleDebug -PkonativeEmbeddedDexPath=<path to a real classes.dex>
-adb install -t -r app/build/intermediates/apk/debug/app-debug.apk   # -t: debug builds are testOnly
+cd testapp && ./gradlew assembleDebug \
+  -PkonativeNdkPath=<...> -PkonativeKotlinc=<...> -PkonativeR8=<...> -PkonativeAndroidJar=<...> \
+  -PkonativeKotlinClasspathDir=<...> -PkonativeAapt2=<...> -PkonativeJavac=<...> -PkonativeAapt2AarDir=<...>
+find app/build -iname "*.apk"                                        # locate the real APK - see testapp/README.md
+adb install -t -r <the real APK found above>                         # -t: debug builds are testOnly
 adb shell am start -n com.konative.testapp/com.konative.testapp.MainActivity
 adb logcat -s Konative:V AndroidRuntime:E DEBUG:E
 ```
 
-(`app/build/intermediates/apk/debug/` — **not** the classic `app/build/outputs/apk/debug/` —
-is where this AGP/Gradle version actually writes the APK; `outputs/apk/` only holds a
-`createDebugApkListingFileRedirect` pointer file now. `-t` is required because AGP marks debug
-builds `testOnly` by default; plain `pm install -t` over `adb shell` has also been seen to fail with
-`INSTALL_FAILED_MEDIA_UNAVAILABLE: Failed to restorecon` on the LDPlayer emulator even with SELinux
-permissive — the client-side streamed `adb install -t` install path (used above) does not hit this.)
+(See `testapp/README.md` for the full property reference, the `KONATIVE_EMBEDDED_DEX_PATH` manual
+override for skipping the automated pipeline, and two real gotchas: where the real APK actually lands
+is Gradle-version-dependent — don't hardcode either `intermediates/apk/` or `outputs/apk/`, `find`
+it — and `-t` is required because AGP marks debug builds `testOnly` by default; plain `pm install -t`
+over `adb shell` has also been seen to fail with `INSTALL_FAILED_MEDIA_UNAVAILABLE: Failed to
+restorecon` on the LDPlayer emulator even with SELinux permissive — the client-side streamed
+`adb install -t` path used above does not hit this.)
 
 A silent `adb logcat` (no `Konative` tag, no crash) most likely means the `.so` never finished
 loading — check `adb logcat *:E` for a dynamic-linker error before assuming anything about
-rendering. This loop is the concrete, executable version of §9's "get a trivial Compose UI to
-actually render, driven entirely by `JNI_OnLoad`" milestone — **exercised end to end for the first
-time** (real installed APK, real device, real logcat proof) using a hand-built placeholder dex, not
-the real Compose UI yet; see §6.7's status table for the exact scope of what that proves versus
-what's still open. What was verified on-device earlier (§6.5), before the `JNI_OnLoad` entry point
-existed, was only the lower-level embed mechanism in isolation — pushed and run directly via
-`adb push` + `adb shell`, not through an installed APK (see `tests/README.md`'s and
-`examples/README.md`'s own rule that Android-only mechanisms don't belong in either folder).
+rendering. **This loop has now been exercised end to end with the real, current, fully-automated
+pipeline (real Compose UI, real AAPT2-linked resources, not a placeholder) via a real
+`./gradlew assembleDebug` run, producing one universal APK containing both `arm64-v8a` and
+`x86_64` native libs, installed and verified correctly on BOTH devices — including, for the first
+time in this project's history, real (non-emulated) physical hardware** (2026-07-18; earlier
+verification of this same pipeline had only ever run on the LDPlayer emulator or via the standalone
+`cmake --preset` flow, never through a real Gradle build nor on the physical phone). See
+`testapp/README.md`'s own "Verified end to end" section for the full detail.
 
 ---
 

@@ -5,9 +5,8 @@
 //
 // The Kotlin Android plugin is here ONLY for MainActivity.kt (a single System.loadLibrary() call,
 // see testapp/README.md) - it is NOT what dexes/embeds the real Compose UI code that ships inside
-// the .so itself; that's a separate hand-rolled kotlinc+d8 CMake pipeline (see
-// ARCHITECTURE.md/project_konative_autonomous_loop memory for the in-progress rework of that
-// pipeline away from the earlier Kotlin/Native-AOT approach).
+// the .so itself; that's a separate, automated kotlinc+aapt2+r8 CMake pipeline (see
+// ARCHITECTURE.md section 6.6 and embedded_kotlin/README.md).
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android") version "2.0.21"

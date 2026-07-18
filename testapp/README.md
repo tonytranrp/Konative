@@ -36,6 +36,11 @@ file for the real, screenshotted, on-device proof.
 
 ## Building and installing
 
+Needs a real Android SDK location before anything else works — either set `ANDROID_HOME`, or create
+`testapp/local.properties` (gitignored, machine-local, standard Android/Gradle convention - not
+specific to this project) with `sdk.dir=<path to the Android SDK>`. Without one, configuration fails
+outright with `SDK location not found` before any of the `konative*` properties below even matter.
+
 ```sh
 cd testapp
 ./gradlew assembleDebug \
@@ -47,11 +52,21 @@ cd testapp
   -PkonativeAapt2=<path to aapt2(.exe)> \
   -PkonativeJavac=<path to javac(.exe)> \
   -PkonativeAapt2AarDir=<path to a directory of the real, unmodified .aar files for the same dependency set>
-adb install -t -r app/build/intermediates/apk/debug/app-debug.apk
+adb install -t -r <the real APK - see "Where the APK actually lands" below>
 ```
 
 (A `gradle wrapper` run — or opening this folder in Android Studio once — is needed once to
-generate `gradlew`/`gradle/wrapper/gradle-wrapper.jar`; neither is vendored in this skeleton.)
+generate `gradlew`/`gradle/wrapper/gradle-wrapper.jar`; neither is vendored in this skeleton. In the
+meantime, any real, sufficiently-recent Gradle distribution invoked directly against this folder
+works too — confirmed with a real, unmodified Gradle 9.4.1 against this project's pinned AGP 8.5.2 -
+`gradlew`'s only real job is fetching+pinning one specific Gradle version automatically, it is not
+otherwise special.)
+
+**`konativeNdkPath` is needed even for a bare `gradle clean`, not just `assembleDebug`** - Gradle
+evaluates this project's full configuration (including `defaultConfig.ndkVersion`) during its
+configure phase regardless of which task is requested, so `clean` alone still hits AGP's
+SDK-managed-NDK license/read-only-SDK wall (see the note on `konativeNdkPath` further down) unless
+the override is passed to every invocation, `clean` included.
 
 **The `kotlinc`+Compose-compiler-plugin+`aapt2`+`r8` CMake pipeline that produces the embedded dex is
 now automated** (`cmake/modules/KonativeEmbedKotlinDex.cmake`, `ARCHITECTURE.md` section 6.6) — the
@@ -104,15 +119,21 @@ the better first choice for debugging a failed load, since `run-as`/direct `/dat
 without restriction there).
 
 ```sh
-adb -s <device-serial> install -t -r app/build/intermediates/apk/debug/app-debug.apk
+adb -s <device-serial> install -t -r <the real APK - see "Where the APK actually lands" below>
 adb -s <device-serial> shell am start -n com.konative.testapp/.MainActivity
 adb -s <device-serial> logcat -s Konative:V AndroidRuntime:E ActivityManager:E   # confirm the .so loaded and the embedded module initialized
 adb -s <device-serial> exec-out screencap -p > konative_test.png                 # confirm the Compose UI actually rendered
 ```
 
-`app/build/intermediates/apk/debug/` (not the classic `app/build/outputs/apk/debug/`, which this
-AGP/Gradle version only leaves a redirect-pointer file in) is where the real APK actually lands —
-verified by building it for real, not assumed. `-t` is required: AGP marks debug builds `testOnly`
+**Where the APK actually lands is Gradle-version-dependent, not a fixed path - don't hardcode
+either location, find it for real each time** (`find app/build -iname "*.apk"`): with one AGP
+8.5.2 + Gradle combination this AGP/Gradle version left only a redirect-pointer file at the classic
+`app/build/outputs/apk/debug/` and the real APK sat at `app/build/intermediates/apk/debug/` instead;
+with a real, unmodified Gradle 9.4.1 invoked directly (2026-07-18), the SAME project produced the
+real, complete APK at the classic `app/build/outputs/apk/debug/app-debug.apk` location instead, with
+`intermediates/apk/` not used the same way. Confirmed via direct inspection both times, not assumed -
+this is a real behavior difference across Gradle versions/invocations for the identical project, not
+a one-off fluke. `-t` is required either way: AGP marks debug builds `testOnly`
 by default and plain `adb install -r` refuses them. Prefer the client-side `adb install` shown
 above over `adb shell pm install` — the latter has been seen to fail with
 `INSTALL_FAILED_MEDIA_UNAVAILABLE: Failed to restorecon` on the LDPlayer emulator even with SELinux
@@ -139,10 +160,32 @@ output as the original hand-built milestone (`ARCHITECTURE.md` §6.6/6.7), with 
 dex-building steps.
 
 **The current pipeline** (`kotlinc`+Compose-compiler-plugin+`aapt2`+r8, all seven toolchain
-properties above) has separately been verified end to end too, as of the same day's later AAPT2
-landing — via a direct `cmake --build` (not a fresh `./gradlew assembleDebug` run) plus a root-push
-deploy of the resulting `.so` onto the same LDPlayer emulator, replacing the installed copy in place
-— identical correct render, clean logcat, no regression. A `./gradlew assembleDebug` run specifically
-exercising all seven properties together hasn't been re-confirmed since AAPT2 landed; the Gradle-driven
-and standalone-CMake-driven paths share the exact same underlying CMake modules, so this is expected
-to work identically, but hasn't been re-proven via that specific entry point.
+properties above) was separately verified end to end via a direct `cmake --build` (not `gradlew`)
+plus a root-push deploy onto LDPlayer the same day AAPT2 landed — identical correct render, clean
+logcat, no regression.
+
+**Then, genuinely re-confirmed via a real `./gradlew assembleDebug` run with all seven properties
+together, AND for the first time ever on real physical hardware** (2026-07-18, same day): a real,
+unmodified Gradle 9.4.1 invoked directly against this project (AGP 8.5.2) with all seven `konative*`
+properties produced one universal debug APK (`app/build/outputs/apk/debug/app-debug.apk`, 8.1MB)
+containing BOTH `lib/arm64-v8a/libkonative_app_native.so` AND `lib/x86_64/libkonative_app_native.so`
+- confirming `abiFilters += listOf("arm64-v8a", "x86_64")` really does produce a working universal
+build, not just a configured intent. Installed and launched on BOTH devices from this single APK:
+- **The physical phone (`R3GL10AHL7P`, Galaxy S24-class, arm64-v8a)** - **the first time this whole
+  Compose/dex-embedding/AAPT2 pipeline has ever run on real (non-emulated) hardware**, not just
+  LDPlayer. Clean logcat (`upgrade_to_resource_aware_loader: upgraded successfully`, no
+  `NoSuchFieldError`/`NoClassDefFoundError`/crash anywhere in the buffer), correct Compose UI render
+  (screenshotted - identical green `Box` + white "Konative" text + "Konative Test App" title, real
+  Samsung One UI navigation bar visible confirming genuine physical hardware, not a simulator).
+- **The LDPlayer x86_64 emulator**, same APK, same clean result - confirming one real Gradle build
+  correctly serves both real device architectures Konative currently targets.
+This closes the previously-open gap (a `./gradlew assembleDebug` run specifically exercising all
+seven properties together, and any real physical-hardware run at all, had not been done before) with
+zero regressions found - the Gradle-driven and standalone-CMake-driven paths do share the same
+underlying CMake modules and now both have real, independent, on-device proof.
+
+**Two more real, one-time-setup gotchas found while getting this far** (beyond the SDK-location and
+`konativeNdkPath`-on-`clean` notes above, both already folded into the relevant sections): none
+specific to Gradle 9.4.1 itself - both are ordinary Android/Gradle project setup requirements this
+project's own docs simply hadn't needed to state yet, since nobody had run a real `gradlew` build
+against a truly clean `testapp/` checkout before this point.
