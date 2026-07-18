@@ -2,6 +2,7 @@ add_executable(konative_tests
   main.cpp
   test_result.cpp
   test_events.cpp
+  test_reflect.cpp
 )
 target_link_libraries(konative_tests PRIVATE konative::konative doctest::doctest)
 konative_apply_warnings(konative_tests)

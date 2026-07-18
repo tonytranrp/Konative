@@ -7,14 +7,14 @@
 
 namespace konative::ecs {
 
-// The composition root for a running Konative app instance: one Registry, one SystemGraph, one
+// The composition root for a running Konative app instance: one Registry, one SystemSequence, one
 // event Dispatcher. entt::registry::ctx() is Konative's dependency-injection mechanism
 // (ARCHITECTURE.md section 4 - deliberately not a separate DI library) - register cross-cutting services
 // via registry().ctx().emplace<Service>(...).
 class World : public konative::core::NonCopyable {
 public:
     [[nodiscard]] Registry& registry() { return registry_; }
-    [[nodiscard]] SystemGraph& systems() { return systems_; }
+    [[nodiscard]] SystemSequence& systems() { return systems_; }
     [[nodiscard]] konative::events::Dispatcher& events() { return dispatcher_; }
 
     void tick(float delta_seconds) {
@@ -24,7 +24,7 @@ public:
 
 private:
     Registry registry_;
-    SystemGraph systems_;
+    SystemSequence systems_;
     konative::events::Dispatcher dispatcher_;
 };
 

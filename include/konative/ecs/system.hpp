@@ -9,10 +9,13 @@
 
 namespace konative::ecs {
 
-// An ordered list of systems run once per frame. Parallel/cross-system-dependency scheduling
-// (Taskflow) is layered on top of this in konative::scheduling, not folded into System itself -
-// keep this the single-threaded, easy-to-reason-about default.
-class SystemGraph {
+// An ordered list of systems run once per frame - deliberately named SystemSequence, not
+// SystemGraph: there is no dependency graph here, just an ordered list (a code review flagged an
+// earlier "SystemGraph" name as confusing next to the REAL graph two folders over,
+// konative::scheduling::TaskGraph). Parallel/cross-system-dependency scheduling (Taskflow) is
+// layered on top of this in konative::scheduling, not folded into System itself - keep this the
+// single-threaded, easy-to-reason-about default.
+class SystemSequence {
 public:
     template <detail::SystemLike F>
     void add(F&& system) {

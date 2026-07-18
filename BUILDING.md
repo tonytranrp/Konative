@@ -8,6 +8,12 @@ cmake --build build/desktop-debug
 ./build/desktop-debug/tests/konative_tests.exe
 ```
 
+**If step 1 fails with `fatal: ambiguous argument 'HEAD0'`**, you have the same npm-`git.cmd`-shim
+issue this repo's own dev machine has — add `-DGIT_EXECUTABLE="<path to the real git.exe>"` (see
+the dedicated troubleshooting entry below for how to find it) to the `cmake --preset` command and
+retry. This is common enough on Windows dev machines with Node.js installed that it's called out
+here up front, not just in troubleshooting.
+
 This is the preset actually exercised so far — verified end to end (configure, build, and the
 resulting test/example binaries actually run) on 2026-07-17. `android-arm64`/`android-x86_64`
 need a real Android NDK; see `CMakeUserPresets.json` (git-ignored, machine-local — create your own

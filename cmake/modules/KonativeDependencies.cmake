@@ -41,7 +41,7 @@ CPMAddPackage(
   NAME spdlog
   GITHUB_REPOSITORY gabime/spdlog
   GIT_TAG v1.17.0
-  OPTIONS "SPDLOG_FMT_EXTERNAL ON"
+  OPTIONS "SPDLOG_FMT_EXTERNAL_HO ON"
 )
 
 # --- Taskflow: DAG-based job scheduling for ECS systems ---
@@ -77,16 +77,25 @@ CPMAddPackage(
 )
 
 # --- libcoro: C++20 coroutines - the one concurrency lib with documented Android NDK support ---
-# GIT_SUBMODULES "" - libcoro's vendor/c-ares/c-ares submodule is only needed for
-# LIBCORO_FEATURE_NETWORKING, which is OFF below; skipping it also sidesteps a real, reproduced
-# git-for-Windows submodule-update failure ("fatal: not a git repository: '.git'") this project
-# hit fetching it on a real Windows dev machine.
+# GIT_SUBMODULES "" is an attempt to skip the vendor/c-ares/c-ares submodule (only needed for
+# LIBCORO_FEATURE_NETWORKING, which is OFF below) - CORRECTION (a code review empirically
+# disproved the original claim here): this does NOT actually skip the submodule. CMake's CMP0097
+# policy defaults to OLD behavior (never explicitly set to NEW anywhere in this repo), under which
+# an empty GIT_SUBMODULES string is treated as "unset" rather than "fetch none," so the ~559-file
+# c-ares submodule is still checked out in full regardless of this line. It is harmless (unused,
+# just wasted clone time/disk), NOT the fix for the real git-for-Windows submodule-update failure
+# ("fatal: not a git repository: '.git'") this project hit - that failure was actually resolved by
+# the -DGIT_EXECUTABLE workaround (see BUILDING.md), which fixes git invocation generally, not
+# this option specifically. Left in place as a statement of intent + a real TODO (setting CMP0097
+# NEW correctly, likely needs to happen before FetchContent's internal subbuild project is
+# generated, not just here) rather than removed, since it's not actively harmful.
 CPMAddPackage(
   NAME libcoro
   GITHUB_REPOSITORY jbaldwin/libcoro
   GIT_TAG v0.16.0
   GIT_SUBMODULES ""
   OPTIONS "LIBCORO_FEATURE_NETWORKING OFF" "LIBCORO_FEATURE_TLS OFF" "LIBCORO_BUILD_TESTS OFF"
+          "LIBCORO_BUILD_EXAMPLES OFF"
 )
 
 # --- Glaze: macro-free reflection-driven JSON, for config/hot-reload ---
@@ -109,9 +118,21 @@ CPMAddPackage(
 
 # --- doctest: testing, chosen over Catch2 for near-zero compile-time overhead (ARCHITECTURE.md section 2) ---
 if(KONATIVE_BUILD_TESTS)
+  # doctest v2.4.11's own CMakeLists.txt declares cmake_minimum_required(VERSION 2.8...) - a floor
+  # CMake 4.x hard-refuses to configure at all (not just a deprecation warning) since CMake 4.0
+  # dropped support for pre-3.5 projects entirely. CMake's own docs are explicit that
+  # CMAKE_POLICY_VERSION_MINIMUM "should not be set by a project... as a way to set its own policy
+  # version" globally - a code review caught this repo doing exactly that (in every
+  # CMakePresets.json preset, affecting every dependency, not just the one that needs it). Scope
+  # it narrowly instead: a plain (non-cache) set() is visible to add_subdirectory()-included
+  # children in the same directory-variable-scope chain, so this affects only doctest's own
+  # configure, not concurrentqueue/readerwriterqueue/etc. (which only warn, not hard-fail, on
+  # their own older floors, and shouldn't have this silently lowered for them too).
+  set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
   CPMAddPackage(
     NAME doctest
     GITHUB_REPOSITORY doctest/doctest
     GIT_TAG v2.4.11
   )
+  unset(CMAKE_POLICY_VERSION_MINIMUM)
 endif()

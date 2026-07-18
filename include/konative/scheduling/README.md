@@ -1,6 +1,6 @@
 # include/konative/scheduling/
 
-Concurrency primitives layered on top of the single-threaded `ecs::SystemGraph`/`events::Dispatcher`
+Concurrency primitives layered on top of the single-threaded `ecs::SystemSequence`/`events::Dispatcher`
 core: Taskflow-based DAG scheduling, a lightweight thread-pool fallback, and the lock-free
 queue types used for cross-thread event/job posting.
 
@@ -9,10 +9,19 @@ queue types used for cross-thread event/job posting.
 - **`entt::registry` and `entt::dispatcher` are not thread-safe — this module exists so nothing
   else has to pretend otherwise.** The sanctioned pattern for parallel ECS work
   (`ARCHITECTURE.md` §5, straight from EnTT's own maintainer) is: get a view's splittable index
-  range via `view.handle()`, partition it with `detail/view_split.hpp`'s `split_evenly()`, hand
-  each slice to a `TaskGraph`/`ThreadPool` job that does `.get<Components...>()` by index. Never
-  call directly into a live `Registry`/`Dispatcher` from more than one thread concurrently without
-  going through this module's boundary primitives first.
+  range via `view.handle()`, partition it, hand each slice to a `TaskGraph`/`ThreadPool` job that
+  does `.get<Components...>()` by index. Never call directly into a live `Registry`/`Dispatcher`
+  from more than one thread concurrently without going through this module's boundary primitives
+  first.
+- **Don't add a hand-rolled index-splitting helper here — use whichever scheduler's own splitting
+  API you've already picked.** An earlier version of this module had a `detail/view_split.hpp`
+  with its own `split_evenly()`; it was removed because it was an unused, byte-for-byte
+  reimplementation of `BS::thread_pool`'s own `blocks<T>` (`BS_thread_pool.hpp`, already a linked
+  dependency of this exact target) — a real "reinvented wheel" a code review caught. If you're
+  using `ThreadPool` (BS::thread_pool), use its own `blocks<T>`/`submit_blocks`/`detach_blocks`
+  directly. If you're using `TaskGraph` (Taskflow), use its own `tf::StaticPartitioner`/
+  `for_each_index`. Only reintroduce a shared splitting helper if a REAL second consumer needs the
+  exact same slicing logic across both schedulers — don't add it back speculatively.
 - **Pick ONE scheduler per subsystem — `TaskGraph` (Taskflow) or `ThreadPool` (BS::thread_pool),
   never both for the same work.** Use `TaskGraph` when there's a real dependency graph between
   jobs (one system must finish before another starts); use `ThreadPool` for simple

@@ -5,10 +5,13 @@
 
 namespace konative::core {
 
-// A minimal Result<T, E>, preferred over exceptions at the Kotlin/Native <-> C++ boundary
-// (ARCHITECTURE.md section 6.3) where an unwound C++ exception cannot safely cross a plain-C-ABI call.
+// A minimal Result<T, E>, preferred over exceptions at any interop boundary where an unwound C++
+// exception cannot safely cross (ARCHITECTURE.md section 6.3, section 12's self-checking loader design).
+// [[nodiscard]] on the class itself (not just its accessors) is deliberate: a function returning
+// a fallible Result whose result gets silently dropped entirely is exactly the bug this type
+// exists to prevent - a code review caught this missing on an earlier pass.
 template <typename T, typename E>
-class Result {
+class [[nodiscard]] Result {
 public:
     static Result ok(T value) { return Result{std::in_place_index<0>, std::move(value)}; }
     static Result err(E error) { return Result{std::in_place_index<1>, std::move(error)}; }
