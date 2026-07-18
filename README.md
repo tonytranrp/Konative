@@ -1,2 +1,4 @@
 # Konative
 Konative compiles Kotlin straight to a single native .so via Kotlin/Native, and wires it directly into Android's own NativeActivity/GameActivity — so your logic and your renderer both live in one native binary, with no JVM, no dex, and no hand-written JNI. It's the Corrosion-for-Cargo idea applied to Kotlin/Native on Android: a build-side layer that packages your androidNative* shared-lib output per ABI into a CMake/Gradle project, paired with a runtime shim over android_native_app_glue, ANativeWindow, and EGL/GLES that drives your Kotlin entry point the way android-activity does for Rust.
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full design (EnTT-based reflection/ECS/events, CPM-managed dependencies, coding-style rules, and the folder layout actually checked into this repo) and [`research/research.md`](research/research.md) for the earlier dex-embedding research pass that this project deliberately moved away from.

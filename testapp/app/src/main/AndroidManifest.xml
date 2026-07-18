@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Exactly ONE Kotlin file in this whole app (MainActivity.kt) - its entire job is
+    System.loadLibrary(), matching GameHub's own testapp/MainActivity.java pattern exactly (see
+    testapp/README.md). This is no longer android:hasCode="false"/android.app.NativeActivity -
+    ARCHITECTURE.md's rendering direction reversed to JVM-hosted Jetpack Compose (dex-embedded in
+    the .so, loaded via InMemoryDexClassLoader), which needs a real Activity/JVM context, not the
+    zero-Kotlin NativeActivity path used earlier this session.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.konative.testapp">
+
+    <application
+        android:label="Konative Test App"
+        android:allowBackup="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:label="Konative Test App"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

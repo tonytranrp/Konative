@@ -30,3 +30,19 @@
 *.exe
 *.out
 *.app
+
+# CMake build directories (CMakePresets.json's own binaryDir convention)
+build/
+
+# clangd / IDE index caches
+.cache/
+compile_commands.json
+
+# Gradle (testapp/) - caches, wrapper jar, and build output; none of this is vendored
+testapp/.gradle/
+testapp/**/build/
+testapp/.idea/
+testapp/local.properties
+testapp/gradle/wrapper/gradle-wrapper.jar
+testapp/gradlew
+testapp/gradlew.bat

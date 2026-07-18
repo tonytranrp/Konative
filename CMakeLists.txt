@@ -1,0 +1,46 @@
+cmake_minimum_required(VERSION 3.23)
+
+project(Konative
+  VERSION 0.1.0
+  DESCRIPTION "Kotlin/Native + C++ fused into one native Android .so — no JVM, no dex, no JNI"
+  LANGUAGES CXX C
+)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
+
+option(KONATIVE_BUILD_EXAMPLES "Build examples/" ${PROJECT_IS_TOP_LEVEL})
+option(KONATIVE_BUILD_TESTS "Build tests/" ${PROJECT_IS_TOP_LEVEL})
+option(KONATIVE_BUILD_KOTLIN_NATIVE "Compile and link the Kotlin/Native side (native/) - see ARCHITECTURE.md \xc2\xa76.3 for the linking risk this carries" ON)
+
+# See ARCHITECTURE.md \xc2\xa74 - CPM.cmake is vendored in-tree (cmake/CPM.cmake), never
+# downloaded fresh at configure time, so that a cold clone + a warm CPM_SOURCE_CACHE can
+# reconfigure fully offline.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CPM.cmake)
+
+include(KonativeWarnings)
+if(ANDROID)
+  include(KonativeAndroidToolchain)
+  include(KonativeKotlinNative)
+endif()
+include(KonativeDependencies)
+
+add_subdirectory(include/konative)
+add_subdirectory(src)
+
+if(ANDROID AND KONATIVE_BUILD_KOTLIN_NATIVE)
+  add_subdirectory(native)
+endif()
+
+if(KONATIVE_BUILD_EXAMPLES)
+  add_subdirectory(examples)
+endif()
+
+if(KONATIVE_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
