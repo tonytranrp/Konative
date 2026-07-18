@@ -28,12 +28,24 @@ namespace konative::core {
 
 namespace detail {
 
+// Constructs a spdlog::logger DIRECTLY from a sink, deliberately NOT via the
+// spdlog::android_logger_mt()/stdout_color_mt() convenience functions - those register the new
+// logger into spdlog's process-global name registry (spdlog::details::registry), which throws
+// (spdlog::spdlog_ex, a std::exception) if a logger named "konative" is ever already registered.
+// core/result.hpp's own doc comment and jni/README.md both state a C++ exception must never
+// unwind across the JNI boundary this logger can first get constructed at (log_error's first-ever
+// call can happen as early as JNI_OnLoad's own first line, jni_onload.cpp) - a verification pass
+// on commit f42bd48 caught that the registry-throwing convenience functions left that boundary
+// unprotected. Constructing the logger directly, with no registry involved, removes the throwing
+// path entirely rather than adding a try/catch around it - the same "fix the real cause, don't
+// patch around it" approach this project has taken for its other real bugs.
 inline std::shared_ptr<spdlog::logger> make_default_logger() {
 #if KONATIVE_PLATFORM_ANDROID
-    return spdlog::android_logger_mt("konative", "Konative");
+    auto sink = std::make_shared<spdlog::sinks::android_sink_mt>("Konative");
 #else
-    return spdlog::stdout_color_mt("konative");
+    auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
 #endif
+    return std::make_shared<spdlog::logger>("konative", std::move(sink));
 }
 
 // Function-local static, not a namespace-scope global - defers construction to first use so this
