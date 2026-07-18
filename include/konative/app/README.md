@@ -19,9 +19,16 @@ entry-point contract every Konative app implements exactly once.
   react to it) — don't reorder it, and don't skip the event dispatch even if a given app's
   override doesn't need it.
 - **This module must not depend on `platform/android/` or `render/`.** `Application` is
-  platform-agnostic on purpose — `platform/android/` depends on `app/`, never the reverse. A
-  desktop test harness (or a future second platform) should be able to drive an `Application`
-  without linking any Android-specific code at all.
+  platform-agnostic on purpose. A desktop test harness (or a future second platform) should be able
+  to drive an `Application` without linking any Android-specific code at all.
+  **Current status, honestly**: `src/platform/android/jni_onload.cpp` (the real `JNI_OnLoad` entry
+  point, `ARCHITECTURE.md` section 6.4) does not depend on `app/` at all right now — the earlier
+  `android_native_app_glue` design that DID call into `app/`'s `entry_point.hpp`/
+  `detail/lifecycle_bridge.hpp` was deleted (commit `3618fb5`), and the new `JNI_OnLoad`-based
+  design's relationship to this module's `Application`/ECS lifecycle is a real open item, not yet
+  decided — see `entry_point.hpp`/`detail/lifecycle_bridge.hpp`'s own comments. The one-way
+  dependency rule above still holds (this module still must never depend the other way), it's just
+  that nothing currently depends on this module from the Android platform side either.
 
 ## Adding to this folder
 

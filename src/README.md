@@ -7,19 +7,22 @@ code.
 ## Hard rules
 
 - **Everything that *can* be header-only, is** — this folder exists only for real entry points
-  (`platform/android/android_main.cpp`), the actual `android_native_app_glue` event-loop
-  implementation (`activity_bridge.cpp`, `looper_pump.cpp` — these need a real translation unit
-  because they define the C callback `android_native_app_glue` invokes and drive a blocking poll
-  loop, neither of which belongs in a header), and any future explicit-template-instantiation
-  choke points. Before adding a `.cpp` here, ask whether the same code could be a `.hpp` in
+  (`platform/android/jni_onload.cpp`, `ARCHITECTURE.md` section 6.4 — the `JNI_OnLoad(JavaVM*,
+  void*)` callback `System.loadLibrary()` invokes automatically, which needs a real translation
+  unit for its `extern "C" JNIEXPORT` linkage) and any future explicit-template-instantiation choke
+  points. Before adding a `.cpp` here, ask whether the same code could be a `.hpp` in
   `include/konative/` instead — the default answer should be yes.
 - **No business/gameplay logic.** A `.cpp` added here should be almost entirely calls into
   `include/konative/**.hpp` — if a file here is doing real work rather than wiring, that work
   probably belongs in a header instead, with only the unavoidable platform entry point left as
   `.cpp`.
-- **Mirrors `include/konative/platform/android/`'s folder shape 1:1** — `src/platform/android/`
-  exists specifically because that module's headers declare a contract
-  (`run_application`/`pump_once`) that needs exactly one real implementation.
+- **`platform/android/` has no C++ header counterpart under `include/konative/`.** An earlier
+  design (`include/konative/platform/android/` declaring a `run_application`/`pump_once` contract
+  for `android_native_app_glue`) was deleted along with that whole event-loop model (commit
+  `3618fb5`) — `jni_onload.cpp` is a self-contained entry point calling straight into
+  `konative::jni`/`konative::embed`, not a contract implementation mirroring a sibling header
+  folder. Don't recreate a `include/konative/platform/android/` folder on the assumption this rule
+  still describes the current design.
 
 ## Adding to this folder
 

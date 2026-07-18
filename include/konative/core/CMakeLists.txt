@@ -14,4 +14,9 @@ target_sources(konative_core INTERFACE
 )
 
 target_compile_features(konative_core INTERFACE cxx_std_20)
-target_link_libraries(konative_core INTERFACE fmt::fmt)
+# fmt::fmt-header-only, not fmt::fmt (compiled) - log.hpp now links spdlog::spdlog_header_only
+# (KonativeDependencies.cmake's SPDLOG_FMT_EXTERNAL_HO option), which itself uses
+# fmt::fmt-header-only internally; using the same target here avoids linking two different fmt
+# build modes into the same binary (previously dormant only because nothing linked konative_core
+# and spdlog together yet - see KonativeDependencies.cmake's own comment on this, now resolved).
+target_link_libraries(konative_core INTERFACE fmt::fmt-header-only spdlog::spdlog_header_only)

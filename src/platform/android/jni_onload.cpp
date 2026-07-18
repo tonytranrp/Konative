@@ -71,5 +71,12 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     env->CallStaticVoidMethod(loaded.value().clazz.get(), install, loaded.value().application.get());
     konative::jni::check_and_clear_exception(env, "CallStaticVoidMethod(install)");
 
+    // `loaded.value()`'s GlobalRefs (clazz, application) are deliberately never reset(env)'d here -
+    // unlike ref.hpp's general "MUST be released explicitly" rule, this is the ONE intentional
+    // exception: keeping the loaded class globally referenced is what pins it (and transitively its
+    // ClassLoader) alive for the rest of the process's life, which is exactly the desired behavior
+    // for a load-once native entry point - a verification pass on commit 3618fb5 flagged this as
+    // worth documenting explicitly, since it reads as a leak against jni/README.md's stated rule
+    // without this note.
     return JNI_VERSION_1_6;
 }

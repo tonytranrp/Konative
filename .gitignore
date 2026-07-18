@@ -41,6 +41,7 @@ compile_commands.json
 # Gradle (testapp/) - caches, wrapper jar, and build output; none of this is vendored
 testapp/.gradle/
 testapp/**/build/
+testapp/**/.cxx/
 testapp/.idea/
 testapp/local.properties
 testapp/gradle/wrapper/gradle-wrapper.jar

@@ -27,9 +27,14 @@ across the Kotlin/Native interop boundary. Nothing else.
   here does anything more than "take an event, call one interop function," that's a sign the logic
   belongs in Kotlin instead.
 - **This module depends on `interop/`, `events/`, and `core/` only.** It must never depend on
-  `platform/android/` directly (the dependency runs the other way: `platform/android/` calls
-  `Renderer`, not vice versa) — keeping this direction one-way is what lets `Renderer` stay
-  testable independent of the real `android_native_app_glue` event loop.
+  `platform/android/` directly — keeping this direction one-way is what lets `Renderer` stay
+  testable independent of whatever drives it on the platform side. (The concrete platform-side
+  driver this rule protects against depending back has changed since this was written — the
+  `android_native_app_glue` event loop it originally named was deleted in commit `3618fb5` in favor
+  of a `JNI_OnLoad` entry point, `ARCHITECTURE.md` section 6.4 — but per this whole file's own
+  pending-rework banner above, `render/`'s Kotlin/Native design is itself superseded, so this rule
+  is being kept for the general one-way-dependency principle, not because the specific old driver
+  it named is still accurate.)
 
 ## Adding to this folder
 
