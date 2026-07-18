@@ -4,11 +4,13 @@ The real APK that loads the fused `.so` (`konative_app_native`, built from the r
 `CMakeLists.txt` via Gradle's `externalNativeBuild`) on an actual device — the on-device
 verification loop for everything in `ARCHITECTURE.md`, not a place for application logic.
 
-**Status (2026-07-17, autonomous-loop rework in progress)**: this app's shape just changed. It is
-no longer a zero-Kotlin `NativeActivity`. Konative's rendering direction reversed to a JVM-hosted
+**Status (2026-07-18, updated)**: landed and verified on real hardware, not in progress. This app is
+no longer a zero-Kotlin `NativeActivity` — Konative's rendering direction reversed to a JVM-hosted
 Jetpack Compose UI, dex-embedded in the `.so` and loaded via `InMemoryDexClassLoader` — see the
 `project-konative-autonomous-loop` memory entry / `ARCHITECTURE.md` for the full reasoning. That
-means `testapp/` needs a real `Activity`, not the framework-provided `android.app.NativeActivity`.
+means `testapp/` needs a real `Activity`, not the framework-provided `android.app.NativeActivity` —
+see the Hard rules below for its exact (minimal) shape, and "Verified end to end" further down this
+file for the real, screenshotted, on-device proof.
 
 ## Hard rules for this folder
 
