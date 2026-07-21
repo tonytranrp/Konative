@@ -397,7 +397,10 @@ files> PG_CONF <path> SYMBOL <prefix>)` automates the full hand-validated recipe
 (`KonativeCompileKotlinDex.cmake`, a `cmake -P` driver following the same shape as
 `KonativeGenerateIncbinAsm.cmake`), then hands the resulting `classes.dex` to the existing
 `konative_embed_binary_blob()`. `src/platform/android/CMakeLists.txt` uses this automatically
-unless `KONATIVE_EMBEDDED_DEX_PATH` is set (a manual-override escape hatch, still supported).
+unless `KONATIVE_EMBEDDED_DEX_PATH` is set (a manual-override escape hatch, still supported — that
+branch also embeds a real resources.arsc if `KONATIVE_EMBEDDED_RESOURCES_ARSC_PATH` is set, or a
+real empty placeholder otherwise, so it keeps linking now that the automated path embeds a second,
+sibling blob too — see `testapp/README.md`).
 Requires three machine-local toolchain paths (`KONATIVE_KOTLINC`, `KONATIVE_R8`,
 `KONATIVE_ANDROID_JAR`) plus `KONATIVE_KOTLIN_CLASSPATH_DIR` (a pre-resolved dependency-jar
 directory — real Maven resolution from CMake is still not solved, see below), set the same way

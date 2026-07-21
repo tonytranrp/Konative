@@ -93,7 +93,14 @@ embed a hand-built or pre-built dex instead (containing a
 `com.konative.generated.KonativeEntryPoint` class with a `@JvmStatic install(Application,
 ByteBuffer?)` static method — the second parameter is the embedded resources.arsc blob, `null` is a
 valid value if you don't have one — which `src/platform/android/jni_onload.cpp` calls). Useful on a
-machine without kotlinc/r8/aapt2 installed at all.
+machine without kotlinc/r8/aapt2 installed at all. Optionally pair it with
+`-PkonativeEmbeddedResourcesArscPath=<path to a real resources.arsc>` (or
+`KONATIVE_EMBEDDED_RESOURCES_ARSC_PATH`) if you have one; if you don't,
+`src/platform/android/CMakeLists.txt` embeds a real, empty placeholder in its place so the link
+still succeeds — a verify-subagent reviewing commit `f231098` caught this branch omitting the
+resources blob entirely, which broke the link outright (the NDK toolchain's default
+`-Wl,--no-undefined`), since `jni_onload.cpp` references it unconditionally regardless of which
+branch supplied the dex.
 
 One more optional `-P`/env-var override exists for the same reason `CMakeUserPresets.json` exists
 for the standalone `cmake --preset` flow (see `BUILDING.md`) — a machine-local escape hatch that

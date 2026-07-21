@@ -84,12 +84,16 @@ fun tryInstallGeneralResourcesLoader(activity: Activity, resourcesArscBuffer: By
         }
 
         // Real, permanent self-check (matches this framework's own "code checks itself" standing
-        // design principle) - confirms Resources.getString() on the two fields
-        // KonativeResourceStringOverride.kt's OWN self-check also covers now genuinely resolves
-        // through the real table, not just that addLoaders() didn't throw. Deliberately does NOT
-        // assert an exact string value here (unlike that other self-check) - the whole point of
-        // this mechanism is real, correctly-localized values, which legitimately vary by device
-        // locale; asserting a specific English string would incorrectly flag success as failure.
+        // design principle) - confirms Resources.getString() on one of the same fields
+        // (the "Tab" role description) KonativeResourceStringOverride.kt's own self-check covers
+        // now genuinely resolves through the real table, not just that addLoaders() didn't throw.
+        // Only checks this one field, not also "Switch" - the whole blob was already SHA-256
+        // -verified byte-for-byte before Kotlin ever saw it (jni_onload.cpp), so a scenario where
+        // the table loads and this field resolves while a sibling field in the same table doesn't
+        // is not a realistic case worth separately guarding against. Deliberately does NOT assert
+        // an exact string value here (unlike that other self-check) - the whole point of this
+        // mechanism is real, correctly-localized values, which legitimately vary by device locale;
+        // asserting a specific English string would incorrectly flag success as failure.
         val verifyTab = runCatching { activity.resources.getString(0x7f08001b) }
         if (verifyTab.isFailure) {
             Log.e(

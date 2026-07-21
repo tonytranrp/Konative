@@ -77,6 +77,17 @@ android {
                 if (dexPath != null) {
                     baseArgs += "-DKONATIVE_EMBEDDED_DEX_PATH=$dexPath"
                 }
+                // Optional companion to konativeEmbeddedDexPath above - pair it with a real
+                // resources.arsc if you have one. If you don't, src/platform/android/CMakeLists.txt's
+                // own KONATIVE_EMBEDDED_DEX_PATH branch embeds a real, empty placeholder instead (a
+                // null/absent resources buffer is a valid, documented configuration - see
+                // testapp/README.md), so this is genuinely optional, not required to keep the link
+                // working.
+                val resourcesArscPath = (project.findProperty("konativeEmbeddedResourcesArscPath") as String?)
+                    ?: System.getenv("KONATIVE_EMBEDDED_RESOURCES_ARSC_PATH")
+                if (resourcesArscPath != null) {
+                    baseArgs += "-DKONATIVE_EMBEDDED_RESOURCES_ARSC_PATH=$resourcesArscPath"
+                }
                 // The automated pipeline's own machine-local toolchain paths - same forwarding shape
                 // as konativeNdkPath/konativeGitExecutable above, and the same variables
                 // CMakeUserPresets.json sets for a plain `cmake --preset` build (see that file and
