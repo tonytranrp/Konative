@@ -1,9 +1,12 @@
 # examples/
 
 Small, self-contained reference apps proving the framework actually works end to end — currently
-`minimal_triangle/`, a desktop-buildable smoke test of the ECS/events core (no Android target
-required; the render calls are no-ops off-Android since there's no Kotlin/Native side linked in a
-desktop build).
+`minimal_triangle/`, a desktop-buildable smoke test of the ECS/events/app lifecycle core (no Android
+target required). Despite the name, it doesn't currently render anything — it's the bare
+`Application` subclass skeleton (`start()`/`tick()`/`destroy()`), with a comment marking where a real
+app would install systems/components. Real rendering is JVM-hosted Compose now
+(`ARCHITECTURE.md` §6.6/§6.7, `embedded_kotlin/`), which needs a real Android Activity to host a
+`ComposeView` — not something this desktop-only example can exercise; see `testapp/` for that.
 
 ## Hard rules
 
