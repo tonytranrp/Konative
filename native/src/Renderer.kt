@@ -19,10 +19,14 @@ import platform.gles3.GL_COLOR_BUFFER_BIT
 import platform.gles3.glClear
 import platform.gles3.glClearColor
 
-// Owns the EGL context/surface + all GLES calls for the entire framework (ARCHITECTURE.md section 6.2).
-// include/konative/render/renderer.hpp (C++) only forwards window/tick events to the three
-// @CName functions below across the interop boundary - no EGL/GLES/Vulkan call may exist
-// anywhere on the C++ side (render/README.md, native/README.md).
+// SUPERSEDED FOR RENDERING, confirmed landed (ARCHITECTURE.md section 6.7/9) - frozen, historical,
+// not extended. Real rendering is JVM-hosted Compose now (embedded_kotlin/); nothing here is called
+// from anywhere live (confirmed: nothing under src/ references konative::render, which is this
+// file's only real caller). Historically owned the EGL context/surface + all GLES calls for the
+// entire framework (ARCHITECTURE.md section 6.2). include/konative/render/renderer.hpp (C++) only
+// forwarded window/tick events to the three @CName functions below across the interop boundary -
+// no EGL/GLES/Vulkan call may exist anywhere on the C++ side, still true regardless of live/frozen
+// status (render/README.md, native/README.md).
 //
 // Kotlin/Native ships EGL + GLES2/GLES3 cinterop bindings for every androidNative* target OUT OF
 // THE BOX (platform.egl / platform.gles2 / platform.gles3 / platform.android,
@@ -34,10 +38,15 @@ import platform.gles3.glClearColor
 // library/src/androidNativeMain/kotlin/.../internal/egl.kt is the reference implementation to
 // port the eglChooseConfig/eglCreateContext/eglCreateWindowSurface sequence from below.
 //
-// UNPROVEN (ARCHITECTURE.md section 9): this is the framework's single largest concentration of risk.
-// Egloo proves the EGL/GLES cinterop bindings compile and link for Android native targets: it
-// does NOT itself prove a JVM-free, NativeActivity-driven render loop end to end on a real
-// device - that validation is this project's own to do, via testapp/'s adb verification loop.
+// UNPROVEN when this was written (ARCHITECTURE.md section 9 as of then): this was called out as
+// the framework's single largest concentration of risk. That title has since moved - ARCHITECTURE.md
+// section 9 now assigns it to the JNI_OnLoad-to-rendered-Compose-UI chain instead, since this
+// module was never actually finished (the TODO below was never filled in) or shipped; this file's
+// own unfinished/unproven state stopped mattering once rendering moved to JVM-hosted Compose
+// entirely, rather than ever getting resolved. Egloo proves the EGL/GLES cinterop bindings compile
+// and link for Android native targets: it does NOT itself prove a JVM-free, NativeActivity-driven
+// render loop end to end on a real device - that validation was this project's own to do, via
+// testapp/'s adb verification loop, and never happened before the pivot away from this design.
 
 @OptIn(ExperimentalForeignApi::class)
 private object EglState {
