@@ -10,9 +10,10 @@
 > `konative::render`). Treat `renderer.hpp` below as a frozen, historical description of a
 > superseded design, not current guidance for new rendering work.
 
-The C++ side of rendering — which, after `ARCHITECTURE.md` §6.2's revision, is deliberately just
-one small class (`renderer.hpp`'s `Renderer`) translating window/tick events into three calls
-across the Kotlin/Native interop boundary. Nothing else.
+The C++ side of rendering, back when Kotlin/Native+EGL was the live design (see banner above for
+current status) — after `ARCHITECTURE.md` §6.2's revision, deliberately just one small class
+(`renderer.hpp`'s `Renderer`) translating window/tick events into three calls across the
+Kotlin/Native interop boundary. Nothing else.
 
 ## Hard rules — the ones that matter most in this whole repo
 
@@ -28,7 +29,9 @@ across the Kotlin/Native interop boundary. Nothing else.
 - **`Renderer` may only ever grow by adding a new thin forwarding method plus a matching new
   `@CName` function on the Kotlin side** — never by adding real graphics logic in C++. If a method
   here does anything more than "take an event, call one interop function," that's a sign the logic
-  belongs in Kotlin instead.
+  belongs in Kotlin instead. (This rule holds permanently regardless of `render/`'s frozen status,
+  same as bullet 1 above — it's about this module never growing real graphics logic, not about the
+  now-frozen Kotlin/Native side still being where new logic would go in practice.)
 - **This module depends on `interop/`, `events/`, and `core/` only.** It must never depend on
   `platform/android/` directly — keeping this direction one-way is what lets `Renderer` stay
   testable independent of whatever drives it on the platform side. (The concrete platform-side
@@ -42,5 +45,8 @@ across the Kotlin/Native interop boundary. Nothing else.
 ## Adding to this folder
 
 Only add a file here if it's genuinely about translating a *new kind* of platform event into the
-interop boundary (e.g. a future `SurfaceResizedEvent` forward). Anything about *how* a frame is
-actually drawn belongs in `native/src/`, never here.
+interop boundary (e.g. a future `SurfaceResizedEvent` forward) for the frozen Kotlin/Native design
+this module still forwards to. Anything about *how* a frame is actually drawn belongs in
+`native/src/`, never here — though real, current rendering work almost certainly belongs in
+`embedded_kotlin/` instead (Compose), not in this frozen module at all; see the banner above before
+adding anything here.
