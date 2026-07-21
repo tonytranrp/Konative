@@ -18,12 +18,13 @@ across the Kotlin/Native interop boundary. Nothing else.
 
 - **No `EGL/*.h`, `GLES2/*.h`, `GLES3/*.h`, or `vulkan/*.h` header may ever be `#include`d
   anywhere under `include/konative/render/`, or anywhere else under `include/konative/`.**
-  Rendering is owned entirely by Kotlin/Native (`native/src/Renderer.kt`), which cinterop-binds
-  those headers directly. An earlier version of this skeleton had a real C++ GLES/Vulkan backend
-  here (`render/backend/gles/`, `render/backend/vulkan/`) — it was deleted on purpose. If you're
-  tempted to re-add one "just to test something," don't: fix or debug the Kotlin/Native side
-  instead, or extend the three-call interop surface (`interop/kotlin_native_bridge.hpp`) if a
-  genuinely new capability is needed.
+  Rendering was historically owned entirely by Kotlin/Native (`native/src/Renderer.kt`), which
+  cinterop-binds those headers directly — that whole path is now frozen/superseded (this file's own
+  banner above), and real rendering is JVM-hosted Compose (`embedded_kotlin/`) instead, which needs
+  none of these headers either. An earlier version of this skeleton had a real C++ GLES/Vulkan
+  backend here (`render/backend/gles/`, `render/backend/vulkan/`) — it was deleted on purpose. If
+  you're tempted to add one now "just to test something," don't: this rule holds permanently
+  regardless of which rendering path is current.
 - **`Renderer` may only ever grow by adding a new thin forwarding method plus a matching new
   `@CName` function on the Kotlin side** — never by adding real graphics logic in C++. If a method
   here does anything more than "take an event, call one interop function," that's a sign the logic

@@ -4,12 +4,13 @@ struct ANativeWindow;
 
 // SUPERSEDED FOR RENDERING, confirmed landed (ARCHITECTURE.md section 6.7/9) - frozen, historical,
 // not extended. The flat, @CName-exported Kotlin/Native entry points the C++ core used to call into
-// (ARCHITECTURE.md section 6.3/section 6.4). Rendering was historically owned entirely by
-// native/src/Renderer.kt via these three calls; now it's JVM-hosted Compose (embedded_kotlin/)
-// instead, with zero EGL/GLES/Vulkan anywhere in the live rendering path. If this boundary is ever
-// revived for a genuinely non-rendering Kotlin/Native use, the same rule still applies: this header
-// must stay small, one flat @CName function + one forward declaration per entry point, never a
-// C++-side GLES/EGL/Vulkan call (see render/README.md).
+// (ARCHITECTURE.md section 6.3 - section 6.4 is JNI_OnLoad, a different mechanism; that
+// cross-reference was already stale before this file's superseded-status fix, not introduced by
+// it). Rendering was historically owned entirely by native/src/Renderer.kt via these three calls;
+// now it's JVM-hosted Compose (embedded_kotlin/) instead, with zero EGL/GLES/Vulkan anywhere in the
+// live rendering path. If this boundary is ever revived for a genuinely non-rendering Kotlin/Native
+// use, the same rule still applies: this header must stay small, one flat @CName function + one
+// forward declaration per entry point, never a C++-side GLES/EGL/Vulkan call (see render/README.md).
 //
 // Matches native/src/Renderer.kt's (frozen, not currently called from anywhere live):
 //   @CName("konative_render_on_window_created")   fun onWindowCreated(window: COpaquePointer?)
