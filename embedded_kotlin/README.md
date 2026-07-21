@@ -302,6 +302,28 @@ LDPlayer was not reachable during this specific round (not running) — not trea
 this whole mechanism is pure managed Kotlin/Android-framework-API logic with no ABI-specific
 behavior, same reasoning as the scoped patch's own earlier physical-hardware-pending note.
 
+**A second real bug found and fixed, this time by a verify-subagent**: the `KONATIVE_EMBEDDED_DEX_PATH`
+manual-override CMake branch (`src/platform/android/CMakeLists.txt`) was never updated when the
+resources.arsc blob landed — it only ever embedded the dex, never the sibling
+`konative_app_dex_resources_*` symbols `jni_onload.cpp` unconditionally `extern`s, so that branch
+silently stopped linking (`-Wl,--no-undefined`). Fixed by embedding a real, empty placeholder blob
+in that branch when no `KONATIVE_EMBEDDED_RESOURCES_ARSC_PATH` is supplied. Two things worth
+recording about how this was verified, since both go a level deeper than usual:
+- The fix itself was verified against the **real NDK r28 toolchain**, not just re-read: reproduced
+  the undefined-symbol link failure, then confirmed linking succeeds and all 4 symbols are correctly
+  defined (`llvm-nm`/`llvm-objdump` show `_start`/`_end` at the same address, `_size` = 0, and
+  `_expected_sha256` = the well-known SHA-256("") constant) once the real
+  `KonativeGenerateIncbinAsm.cmake` script embeds the same empty placeholder the fix generates.
+- The fix's *runtime* safety net — an empty resources.arsc should make `ResourcesProvider
+  .loadFromTable()` throw, safely falling back to the scoped patch — was flagged by the verify-
+  subagent as a reasonable but empirically-untested assumption. Closed for real on
+  **physical hardware** (`R3GL10AHL7P`, API 36): a minimal standalone Kotlin snippet mirroring
+  `tryInstallGeneralResourcesLoader()`'s exact `memfd_create`/`write`/`loadFromTable()` sequence,
+  compiled with the real toolchain and run via `adb shell app_process` (no full app install needed),
+  confirms `loadFromTable()` really does throw on a genuinely empty table:
+  `java.io.IOException: Failed to load asset path ... from fd 65` — exactly the exception class
+  `catch (e: Exception)` already handles, exactly as designed.
+
 ## Adding to this folder
 
 New `@Composable` UI, new `ActivityLifecycleCallbacks` behavior, new state — all real Kotlin here,

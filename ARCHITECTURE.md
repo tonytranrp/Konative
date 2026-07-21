@@ -213,9 +213,10 @@ apply to the rendering/app target at all.** `NativeActivity` takes over the whol
 `Surface`; it cannot host a `setContentView(composeView)` tree at all, which rules it out
 categorically once rendering is JVM-hosted Compose rather than raw EGL. `testapp/`'s manifest
 already reflects this (a plain `Activity`, not `NativeActivity`) and
-`src/platform/android/{android_main.cpp,activity_bridge.cpp,looper_pump.cpp}` are consequently dead
-code as of this rewrite — orphaned since the manifest change, scheduled for deletion alongside the
-`JNI_OnLoad` rewrite landing (§6.7). **§6.1–6.3 below are kept, not deleted, and are the historical
+`src/platform/android/{android_main.cpp,activity_bridge.cpp,looper_pump.cpp}` were consequently dead
+code as of this rewrite, then actually deleted alongside the `JNI_OnLoad` rewrite landing (§6.7) —
+confirmed gone from the real tree, not merely scheduled. **§6.1–6.3 below are kept, not deleted, and
+are the historical
 design those dead files (plus `native/`, `include/konative/{interop,render}/`, and a number of
 other still-existing files) were written against** — many real, currently-live files still cite
 these exact section numbers for mechanics that remain individually true (the `@CName`/`_api.h`

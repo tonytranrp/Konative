@@ -53,14 +53,14 @@ android {
                 // top-level project (examples/tests are for the desktop-debug preset, not this
                 // APK).
                 //
-                // PENDING REWORK (see project_konative_autonomous_loop memory / ARCHITECTURE.md):
-                // KONATIVE_BUILD_KOTLIN_NATIVE currently controls the earlier, now-superseded
-                // Kotlin/Native-AOT-compiles-to-EGL/GLES module (native/CMakeLists.txt). The
-                // rendering direction reversed to JVM-hosted Jetpack Compose, dex-embedded and
-                // loaded via InMemoryDexClassLoader - that pipeline's own CMake flag/module is
-                // being built out in a follow-up commit once the open Compose/self-checking
-                // research lands. Left OFF here deliberately until that lands, so this Gradle
-                // build doesn't silently try to compile the superseded path.
+                // KONATIVE_BUILD_KOTLIN_NATIVE controls the earlier, now-superseded (confirmed
+                // landed, not pending - ARCHITECTURE.md SS6.7) Kotlin/Native-AOT-compiles-to-EGL/GLES
+                // module (native/CMakeLists.txt). Rendering is JVM-hosted Jetpack Compose,
+                // dex-embedded and loaded via InMemoryDexClassLoader - that pipeline's own CMake
+                // module (KonativeEmbedKotlinDex.cmake) has been built and is what this Gradle build
+                // actually drives by default now (see konativeEmbeddedDexPath below). Left OFF here
+                // permanently, not provisionally, so this Gradle build never tries to compile the
+                // superseded path.
                 val baseArgs = mutableListOf(
                     "-DKONATIVE_BUILD_EXAMPLES=OFF",
                     "-DKONATIVE_BUILD_TESTS=OFF",
