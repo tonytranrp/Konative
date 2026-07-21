@@ -1,12 +1,14 @@
 # include/konative/render/
 
-> **PENDING REWORK (2026-07-17)**: this folder's content below describes rendering via
-> Kotlin/Native + raw EGL, which `ARCHITECTURE.md`'s status banner marks superseded — rendering
-> is moving to JVM-hosted Jetpack Compose (dex-embedded, loaded via `InMemoryDexClassLoader`).
-> The hard rule "no EGL/GLES/Vulkan header here" likely still holds in spirit (rendering still
-> shouldn't be reimplemented in C++), but this folder's actual contents will change once the
-> in-flight Compose research lands — see `project-konative-autonomous-loop` memory. Don't treat
-> `renderer.hpp` below as current until this banner is removed.
+> **SUPERSEDED FOR RENDERING (confirmed 2026-07-18, not pending)**: this folder's content below
+> describes rendering via Kotlin/Native + raw EGL — that design is confirmed superseded, not
+> "in flight." Rendering is real, landed, verified-on-real-hardware JVM-hosted Jetpack Compose
+> (dex-embedded, loaded via `InMemoryDexClassLoader`; `ARCHITECTURE.md` §6.6/§6.7). The hard rule
+> "no EGL/GLES/Vulkan header here" still holds, now permanently rather than provisionally — nothing
+> in this project renders via C++ or Kotlin/Native anymore, and no live code path currently
+> constructs or calls the `Renderer` class below (confirmed: nothing under `src/` references
+> `konative::render`). Treat `renderer.hpp` below as a frozen, historical description of a
+> superseded design, not current guidance for new rendering work.
 
 The C++ side of rendering — which, after `ARCHITECTURE.md` §6.2's revision, is deliberately just
 one small class (`renderer.hpp`'s `Renderer`) translating window/tick events into three calls
@@ -31,10 +33,10 @@ across the Kotlin/Native interop boundary. Nothing else.
   testable independent of whatever drives it on the platform side. (The concrete platform-side
   driver this rule protects against depending back has changed since this was written — the
   `android_native_app_glue` event loop it originally named was deleted in commit `3618fb5` in favor
-  of a `JNI_OnLoad` entry point, `ARCHITECTURE.md` section 6.4 — but per this whole file's own
-  pending-rework banner above, `render/`'s Kotlin/Native design is itself superseded, so this rule
-  is being kept for the general one-way-dependency principle, not because the specific old driver
-  it named is still accurate.)
+  of a `JNI_OnLoad` entry point, `ARCHITECTURE.md` section 6.4 — and per this whole file's banner
+  above, `render/`'s Kotlin/Native design is itself confirmed superseded, so this rule is kept for
+  the general one-way-dependency principle alone, not because the specific driver it named, or the
+  Kotlin/Native renderer it points at, is still the live architecture.)
 
 ## Adding to this folder
 

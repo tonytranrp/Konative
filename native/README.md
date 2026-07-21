@@ -1,24 +1,31 @@
 # native/
 
-> **PENDING REWORK (2026-07-17)**: rendering moved to JVM-hosted Jetpack Compose, dex-embedded and
-> loaded via `InMemoryDexClassLoader` — NOT the Kotlin/Native-AOT-compiled-EGL approach this
-> folder currently documents/contains (`src/Renderer.kt`). That code is superseded, not yet
-> deleted (kept until the replacement dex-embedding pipeline is built and this folder's content is
-> rewritten to match, so the repo stays buildable at each committed step). See
-> `project-konative-autonomous-loop` memory for the reasoning. Kotlin/Native itself may still be
-> useful for non-rendering native logic later — the C-ABI mechanics documented below aren't wrong,
-> just not what owns rendering anymore.
+> **SUPERSEDED FOR RENDERING (confirmed 2026-07-18, not pending)**: rendering moved to JVM-hosted
+> Jetpack Compose, dex-embedded and loaded via `InMemoryDexClassLoader` — this has landed and been
+> verified end-to-end on real hardware (`ARCHITECTURE.md` §6.6/§6.7/§13), not just proposed. The
+> Kotlin/Native-AOT-compiled-EGL approach this folder documents/contains (`src/Renderer.kt`) is
+> fully superseded and frozen — kept only as a historical record, not "pending deletion once the
+> replacement is built": the replacement has been built, shipped, and re-verified multiple times
+> since this note was first written. Do not extend this folder for rendering; see
+> `project-konative-autonomous-loop` memory and `ARCHITECTURE.md` §6.7 for current status. Kotlin/
+> Native itself may still be useful for non-rendering native logic later — the C-ABI mechanics
+> documented below aren't wrong, just not what owns rendering anymore.
 
 The Kotlin/Native side — compiled ahead-of-time to real ARM64/x86_64 machine code by
-`kotlinc-native` (never the JVM-targeting `kotlinc`), linked directly into the fused `.so`. Owns
-**all** rendering (EGL/GLES/Vulkan) and, over time, whatever app logic is more naturally expressed
-in Kotlin than C++.
+`kotlinc-native` (never the JVM-targeting `kotlinc`), linked directly into the fused `.so`.
+**Historically** owned all rendering (EGL/GLES/Vulkan); that responsibility now belongs entirely to
+`embedded_kotlin/`'s JVM-hosted Compose UI (`ARCHITECTURE.md` §6.6/§6.7). This folder is frozen for
+rendering purposes — it exists now only as a historical record plus a real, documented C-ABI
+mechanism available for a future non-rendering need.
 
 ## Hard rules
 
-- **This is the ONLY place EGL/GLES/Vulkan calls may exist in the entire framework.**
-  `include/konative/render/` (C++) is a thin forwarder — see its own `README.md`. If you're
-  writing a `gl*`/`egl*`/`vk*` call anywhere that isn't under `native/src/`, stop and move it here.
+- **This folder is frozen for rendering — do not extend it for that purpose.** It used to be the
+  only place EGL/GLES/Vulkan calls could exist in the framework; rendering is now JVM-hosted Compose
+  and zero OpenGL/EGL/Vulkan headers appear anywhere in the live rendering path (`ARCHITECTURE.md`
+  §6.7). `include/konative/render/` (C++) documents the same supersession — see its own `README.md`.
+  If you're about to write a new `gl*`/`egl*`/`vk*` call anywhere, stop: that's not this project's
+  rendering path anymore.
 - **Every function the C++ core calls must be top-level and `@CName`-annotated**, exporting a flat
   C symbol matching a forward declaration in `include/konative/interop/kotlin_native_bridge.hpp`
   exactly (`ARCHITECTURE.md` §6.3). Never rely on the generated `_api.h` nested-struct surface.

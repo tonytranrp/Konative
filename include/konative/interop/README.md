@@ -1,7 +1,11 @@
 # include/konative/interop/
 
-The Kotlin/Native ⇄ C++ C-ABI boundary — the single highest-uncertainty module in the whole
-framework (`ARCHITECTURE.md` §6.3/§9). Read that before touching anything here.
+The Kotlin/Native ⇄ C++ C-ABI boundary. **No longer on this project's critical path**
+(`ARCHITECTURE.md` §9) now that rendering is JVM-hosted Compose — the single largest concentration
+of unproven risk in the framework has moved to the `JNI_OnLoad`-to-Compose chain instead
+(`embedded_kotlin/`, `include/konative/jni/`). This module is kept because its C-ABI mechanics
+remain real and documented for a possible future, non-rendering use of Kotlin/Native (`ARCHITECTURE.md`
+§6.3) — read that before touching anything here.
 
 ## Hard rules
 
