@@ -1,7 +1,9 @@
-# The Kotlin/Native <-> C++ C-ABI boundary - ARCHITECTURE.md section 6.3, the single highest-uncertainty
-# module in the whole framework. Real, documented, unresolved community friction exists for this
-# exact combination (libc++/libm symbol conflicts) - this module is scaffolding for a spike, not a
-# proven-working bridge yet.
+# The Kotlin/Native <-> C++ C-ABI boundary - ARCHITECTURE.md section 6.3. No longer on this
+# project's critical path now that rendering is JVM-hosted Compose (ARCHITECTURE.md section 9) -
+# the single largest concentration of unproven risk has moved to the JNI_OnLoad-to-Compose chain
+# instead (embedded_kotlin/, include/konative/jni/). Kept because its C-ABI mechanics (real,
+# documented, unresolved community friction for this exact libc++/libm symbol-conflict combination)
+# remain real and useful for a possible future, non-rendering use of Kotlin/Native.
 add_library(konative_interop INTERFACE)
 add_library(konative::interop ALIAS konative_interop)
 

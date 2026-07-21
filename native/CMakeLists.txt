@@ -1,6 +1,11 @@
-# The Kotlin/Native side (ARCHITECTURE.md section 6/section 7) - compiled by kotlinc-native via
-# KonativeKotlinNative.cmake, never javac/kotlinc/d8 (that was the dex-embedding path this
-# project explicitly moved away from - see ARCHITECTURE.md section 1 and research/research.md).
+# SUPERSEDED FOR RENDERING, confirmed landed (ARCHITECTURE.md section 6.7/9, native/README.md) -
+# frozen, historical, do not extend for rendering. The Kotlin/Native side - compiled ahead-of-time
+# by kotlinc-native via KonativeKotlinNative.cmake, never javac/kotlinc/d8. Confusingly, THIS
+# project's own rendering history went dex-embedding (very first research pass) -> Kotlin/Native
+# AOT+EGL (this module, moved away from dex-embedding) -> JVM-hosted Compose, dex-embedded again
+# (current, final - ARCHITECTURE.md section 6.6/6.7, embedded_kotlin/) - so "dex-embedding" is
+# simultaneously this module's abandoned past AND the live rendering path today, just via a totally
+# different, unrelated kotlinc+aapt2+r8 pipeline than whatever the original research pass explored.
 #
 # No CINTEROP_DEF needed here: Kotlin/Native ships pre-built EGL/GLES2/GLES3/Android cinterop
 # bindings for every androidNative* target out of the box (platform.egl/platform.gles3/
