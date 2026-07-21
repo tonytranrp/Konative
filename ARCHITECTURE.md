@@ -512,20 +512,31 @@ retargeted from "wrap `cargo rustc`" to "wrap `kotlinc-native`":
 
 ---
 
-## 8. Project layout (see the skeleton actually created alongside this document)
+## 8. Project layout (the real, current tree — cross-checked against the repo itself on 2026-07-21,
+not the original pre-Compose-pivot skeleton; see the note below the tree for what changed and why)
 
 ```
 Konative/
 ├── ARCHITECTURE.md            (this document)
+├── BUILDING.md                (real toolchain setup + documented workarounds, e.g. the CPM/
+│                                git.cmd-shim issue)
 ├── README.md
+├── LICENSE
 ├── CMakeLists.txt             (root: options, CPM bootstrap, add_subdirectory chain)
 ├── CMakePresets.json
+├── CMakeUserPresets.json      (gitignored, machine-local — real KOTLINC/R8/ANDROID_JAR/AAPT2/JAVAC/
+│                                KOTLIN_CLASSPATH_DIR/AAPT2_AAR_DIR paths live here, not in git)
 ├── cmake/
 │   ├── CPM.cmake              (vendored — offline-reproducible per §4)
 │   └── modules/
-│       ├── KonativeDependencies.cmake   (every CPMAddPackage() call, pinned tags)
-│       ├── KonativeAndroidToolchain.cmake (reads ANDROID_ABI/PLATFORM, derives Kotlin/Native target)
-│       ├── KonativeKotlinNative.cmake     (kotlinc-native wrapper — mirrors GameHub's module)
+│       ├── KonativeDependencies.cmake      (every CPMAddPackage() call, pinned tags)
+│       ├── KonativeAndroidToolchain.cmake  (reads ANDROID_ABI/PLATFORM, derives NDK toolchain values)
+│       ├── KonativeKotlinNative.cmake      (kotlinc-native wrapper — historical, see native/ below)
+│       ├── KonativeEmbedBlob.cmake         (.incbin blob embedder + build-time SHA-256, §6.5)
+│       ├── KonativeGenerateIncbinAsm.cmake (emits the .S file KonativeEmbedBlob.cmake assembles)
+│       ├── KonativeCompileKotlinDex.cmake  (kotlinc+Compose-compiler-plugin+aapt2+r8 pipeline, §6.6)
+│       ├── KonativeEmbedKotlinDex.cmake    (drives the above, embeds both the dex AND resources.arsc
+│       │                                    blobs via KonativeEmbedBlob.cmake, §6.6/§6.7)
 │       └── KonativeWarnings.cmake
 ├── include/konative/
 │   ├── core/            (Result<T,E>, assert, log, non_copyable, type_traits — detail/ inside)
@@ -537,29 +548,61 @@ Konative/
 │   │   ├── window/*.hpp          (WindowCreatedEvent.hpp, WindowResizedEvent.hpp, ...)
 │   │   └── input/*.hpp           (TouchDownEvent.hpp, KeyEvent.hpp, ...)
 │   ├── scheduling/       (Taskflow / BS::thread_pool wrappers — detail/ inside)
-│   ├── platform/android/ (native_app_glue / GameActivity glue, looper pump — detail/ inside)
-│   ├── render/           (translates window/tick events into interop calls ONLY — §6.2, no
-│   │                      EGL/GLES/Vulkan header may ever appear here)
-│   ├── interop/           (Kotlin/Native ⇄ C++ C-ABI boundary — the highest-risk module, §6.3)
-│   └── app/               (Application/entry-point wiring)
-├── src/                  (only load-bearing .cpp: android entry point, activity_bridge.cpp/
-│                          looper_pump.cpp implementing the real android_native_app_glue loop)
-├── native/               (Kotlin/Native side, compiled by KonativeKotlinNative.cmake — owns ALL
-│   ├── src/               rendering per §6.2, via Kotlin/Native's BUNDLED EGL/GLES/Android
-│   │                      cinterop bindings — no custom .def file needed for that)
+│   ├── embed/            (checked_blob.hpp — build-time-SHA-256-verified blob loading, §6.5)
+│   ├── jni/              (dex_loader.hpp/call.hpp/ref.hpp — InMemoryDexClassLoader construction
+│   │                      and JNI call/ref helpers `jni_onload.cpp` uses, §6.6)
+│   ├── render/           (renderer.hpp — translates window/tick events into interop calls ONLY —
+│   │                      §6.2, no EGL/GLES/Vulkan header may ever appear here)
+│   ├── interop/          (c_abi_export.hpp/kotlin_native_bridge.hpp — Kotlin/Native ⇄ C++ C-ABI
+│   │                      boundary; historical, see §9 — no longer on this project's critical path
+│   │                      now that rendering is JVM-hosted Compose, not Kotlin/Native+EGL)
+│   └── app/              (application.hpp/entry_point.hpp — Application/entry-point wiring)
+├── src/
+│   ├── CMakeLists.txt
+│   ├── README.md
+│   └── platform/android/
+│       ├── CMakeLists.txt
+│       └── jni_onload.cpp   (the one real entry point — JNI_OnLoad → verify_blob() →
+│                              load_class_from_dex() → install(Application, ByteBuffer?), §6.4; the
+│                              old android_main/activity_bridge.cpp/looper_pump.cpp trio this
+│                              replaced is fully REMOVED, not just superseded — confirmed by §6.7's
+│                              own status table, which this tree used to silently contradict)
+├── native/               (Kotlin/Native side — FULLY SUPERSEDED for rendering, kept only as a
+│   ├── src/Renderer.kt    historical record per §6.7/§9; do not extend)
 │   └── cinterop/         (empty by default — reserved for a genuinely un-bundled C API a future
 │                          need might require, e.g. Vulkan; see native/cinterop/README.md)
-├── testapp/              (a real Gradle Android app that loads the fused .so via NativeActivity/
-│                          GameActivity for on-device adb verification — §13. Owns zero
-│                          application logic itself.)
+├── embedded_kotlin/      (the real, CURRENT JVM/Compose UI source tree — compiled by
+│   ├── README.md          KonativeCompileKotlinDex.cmake into the dex blob jni_onload.cpp loads;
+│   ├── r8-rules.pro       this folder didn't exist yet when this tree was first written and is now
+│   └── src/com/konative/generated/  (the single most load-bearing source tree in the project:
+│                          KonativeEntryPoint.kt — the real install() entry point and Compose root;
+│                          KonativeResourcesLoader.kt + KonativeResourceStringOverride.kt — the two
+│                          resources.arsc runtime-gap fixes, §6.6/§6.7; KonativeResourceProvider.kt)
+├── testapp/              (a real Gradle Android app with ONE real loader file —
+│                          testapp/app/src/main/java/com/konative/testapp/MainActivity.kt — that
+│                          calls System.loadLibrary() and nothing else; its own build.gradle.kts
+│                          drives the root CMakeLists.txt end to end (CPM fetch, NDK cross-compile,
+│                          Kotlin+Compose dex build, embed, packaging), §13. NOT NativeActivity/
+│                          GameActivity-based, despite what an earlier version of this tree claimed.)
 ├── examples/
 ├── tests/
 └── research/
-    └── research.md       (the dex-embedding research pass — kept as prior art, not the chosen path)
+    ├── research.md                         (the dex-embedding research pass — kept as prior art)
+    ├── incbin_embedding_research.md         (§6.5's grounding — real .incbin/Stockfish precedent)
+    └── jni_activity_bootstrap_research.md   (§6.4's grounding — ActivityLifecycleCallbacks design)
 ```
 
 Every folder listed above with real content also has its own `README.md` stating that folder's
 hard rules — see §12. Read the local `README.md` before adding a file to any of these folders.
+
+**Why this tree needed rewriting**: it originally described the project's *very first* skeleton, from
+before either architecture pivot (§6's own banner). It survived both pivots unchanged, so by this
+rewrite it flatly contradicted §6.7's status table on multiple points at once — claiming
+`include/konative/platform/android/` existed (it never does; no such directory is in the repo),
+claiming `src/` still contained `activity_bridge.cpp`/`looper_pump.cpp` (removed), describing
+`native/` as "owns ALL rendering" (fully superseded), and omitting `embedded_kotlin/` entirely (now
+the project's main source tree). Fixed by cross-checking every entry against the real, current repo
+tree rather than editing the prose in place again.
 
 ---
 
