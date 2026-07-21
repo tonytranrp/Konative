@@ -18,11 +18,14 @@
 > against the real dependency AARs, replacing the old hand-shimmed `embedded_kotlin/r_shim/`
 > stopgap entirely — §6.6). The R8 `fill$default` optimizer bug is now root-caused and understood
 > (§6.6, `embedded_kotlin/r8-rules.pro`) — `-dontoptimize` remains the fix, confirmed the only one
-> that works on this toolchain after an exhaustive, empirical search for a narrower alternative.
-> §6.7's status table states exactly what's landed vs. what's still genuinely open (a separate,
-> deeper runtime gap around `Resources.getString()`-backed resource fields, needing a real decision
-> about `testapp/`'s own scope — not a stopgap needing more engineering, a decision needing the
-> project owner). **A terminology note worth being honest about**: every "verified on real hardware"
+> that works on this toolchain after an exhaustive, empirical search for a narrower alternative. The
+> runtime `resources.arsc` gap (real `Resources.getString()`-backed fields resolving correctly, not
+> just having correct integer IDs) is now landed too, on BOTH sides: a general, comprehensive
+> mechanism (`android.content.res.loader.ResourcesLoader`, API 30+, a second embedded resources.arsc
+> blob) with a small, self-checking scoped patch as the automatic fallback below that API floor —
+> neither needed touching `testapp/`'s own scope after all, so that decision never had to be forced.
+> §6.7's status table states exactly what's landed (nearly everything, as of 2026-07-21). **A
+> terminology note worth being honest about**: every "verified on real hardware"
 > claim above, up through the R8 investigation, was verified on the rooted LDPlayer x86_64 *emulator*
 > — "real hardware" meant "a real running Android OS instance reachable via `adb`," not literally
 > non-emulated silicon. That distinction stopped being hypothetical on 2026-07-18: the full current
@@ -378,7 +381,7 @@ verification history including one real bug caught and fixed):
 `KonativeEntryPoint`/`ComposeHostOwner`/a trivial `@Composable` proof UI, implementing
 `research/jni_activity_bootstrap_research.md` §5.2's design directly — **actually renders on real
 hardware**: a screenshotted green `Box` with white "Konative" text, driven entirely by
-`JNI_OnLoad` → `verify_blob()` → `load_class_from_dex()` → `install(Application)` →
+`JNI_OnLoad` → `verify_blob()` → `load_class_from_dex()` → `install(Application, ByteBuffer?)` →
 `ActivityLifecycleCallbacks` → `ComposeView` → real Jetpack Compose composition, no OpenGL/EGL/
 Vulkan anywhere. See `embedded_kotlin/README.md`'s Status section for the full, real bug list this
 took (five distinct real issues, each with its own root cause and fix, not just "it compiled").
@@ -473,12 +476,12 @@ class does declare the no-arg constructor R8 was stripping.
 | Runtime SHA-256 self-check (`include/konative/embed/checked_blob.hpp`) | **Landed, verified (desktop unit tests + real on-device round-trip)** |
 | Dex-loader (`InMemoryDexClassLoader` construction, `include/konative/jni/`) | **Landed, ported from `GameHub`** |
 | `JNI_OnLoad` entry point (`src/platform/android/jni_onload.cpp`) | **Landed** |
-| **Full `JNI_OnLoad` → `verify_blob()` → `load_class_from_dex()` → reflective `install(Application)` chain** | **Verified end-to-end on real hardware** with both a placeholder entry point (real logcat proof) and the real Compose entry point (real screenshotted rendering) |
+| **Full `JNI_OnLoad` → `verify_blob()` → `load_class_from_dex()` → reflective `install(Application, ByteBuffer?)` chain** | **Verified end-to-end on real hardware** with both a placeholder entry point (real logcat proof) and the real Compose entry point (real screenshotted rendering) |
 | `KonativeResourceProvider` (`embedded_kotlin/`) — resource lookup for a dex-loaded `ClassLoader` | **Landed, verified on real hardware** — see §6.6 |
 | `kotlinc`+Compose-compiler-plugin+`r8` CMake pipeline (`KonativeEmbedKotlinDex.cmake`) | **Landed and verified** — real `cmake --build` and real `./gradlew assembleDebug`, both rendering correctly on-device (§6.6) |
 | Embedded Kotlin+Compose source tree (`embedded_kotlin/KonativeEntryPoint`) | **Landed and rendering on real hardware** — real screenshot proof (§6.6), no known blockers remaining for this proof-of-concept's scope |
 | AAPT2 resource linking for the embedded dex (real `R$id`/`R$string`/etc. values) | **Landed and verified** — `KonativeCompileKotlinDex.cmake` Step 1.5, replaces the deleted `embedded_kotlin/r_shim/` stopgap entirely (§6.6) |
-| Runtime `resources.arsc` backing for `Resources.getString()`-class fields (`R$string`/`R$style`/`R$styleable`) | **The two specific known-broken fields are fixed** (a small, self-checking `Context`/`Resources` wrapper, `embedded_kotlin/KonativeResourceStringOverride.kt`, verified on-device including its own negative-path failure detection) — **the general case remains open**, researched and fully designed (`android.content.res.loader.ResourcesLoader`, API 30+) but deliberately not built, since nothing in the current composable tree needs it yet; see `embedded_kotlin/README.md`'s 2026-07-18 updates |
+| Runtime `resources.arsc` backing for `Resources.getString()`-class fields (`R$string`/`R$style`/`R$styleable`) | **Landed and verified on real hardware, both mechanisms** — the general, comprehensive fix (`android.content.res.loader.ResourcesLoader`, API 30+, `embedded_kotlin/KonativeResourcesLoader.kt`, a second embedded `resources.arsc` blob) with `embedded_kotlin/KonativeResourceStringOverride.kt`'s smaller, scoped patch as the automatic fallback below that API floor; see `embedded_kotlin/README.md`'s Update sections for the full writeup of both |
 | `src/platform/android/{android_main,activity_bridge,looper_pump}.cpp` + `include/konative/platform/android/` | **Removed** (superseded by `jni_onload.cpp` + `include/konative/jni/`) |
 | `testapp/`'s Gradle build (`app/build.gradle.kts`) | **Landed** — drives the real root `CMakeLists.txt` for `konative_app_native` end to end (CPM fetch, Android NDK cross-compile, automated Kotlin+Compose dex build, `.incbin` embed, dex packaging); `-PkonativeEmbeddedDexPath=<path>` (see `testapp/README.md`) remains available as a manual override, no longer required |
 | Kotlin/Native (`native/src/Renderer.kt`, EGL/GLES rendering) | **Fully superseded for rendering** — kept only as a historical record; do not extend |

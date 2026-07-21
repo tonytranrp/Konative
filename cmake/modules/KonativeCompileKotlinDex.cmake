@@ -9,7 +9,7 @@ foreach(_required
     KONATIVE_KOTLINC KONATIVE_COMPOSE_PLUGIN KONATIVE_KOTLIN_STDLIB_JAR KONATIVE_R8 KONATIVE_ANDROID_JAR
     KONATIVE_CLASSPATH_DIR KONATIVE_PG_CONF KONATIVE_MIN_API KONATIVE_SOURCES
     KONATIVE_GEN_DIR KONATIVE_DEX_FILE
-    KONATIVE_AAPT2 KONATIVE_JAVAC KONATIVE_AAPT2_AAR_DIR)
+    KONATIVE_AAPT2 KONATIVE_JAVAC KONATIVE_AAPT2_AAR_DIR KONATIVE_RESOURCES_ARSC_FILE)
   if(NOT DEFINED ${_required})
     message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: ${_required} must be passed via -D")
   endif()
@@ -110,13 +110,14 @@ endif()
 # libraries below, see the research this is based on).
 #
 # What this DOES fix: build-time/classload-time correctness (R8 "missing class"/NoSuchFieldError) -
-# the entire, actual problem r_shim/ was built to solve. What this does NOT fix (deliberately, not
-# an oversight - see embedded_kotlin/README.md's Status section for the full writeup): fields
-# ultimately backed by Resources.getString()/a real resources.arsc table (R$string/R$style/
-# R$styleable/etc.) still won't resolve at true runtime, because neither this embedded module nor
-# testapp/'s own APK packages any res/ content - that is a separate, deeper, deliberately-deferred
-# problem needing a real decision about testapp/'s own resource-packaging scope, not something to
-# silently paper over here.
+# the entire, actual problem r_shim/ was built to solve. This step ALSO now keeps (rather than
+# discards) the real, complete resources.arsc that aapt2 link itself already produces alongside the
+# R.java it was always used for - see the KONATIVE_RESOURCES_ARSC_FILE extraction below - which
+# feeds the general Resources.getString()/ResourcesLoader runtime mechanism
+# (embedded_kotlin/KonativeResourcesLoader.kt, API 30+). Below that API floor, or if that mechanism
+# isn't available/fails, embedded_kotlin/KonativeResourceStringOverride.kt's smaller, scoped patch
+# remains the fallback for the two specific fields it already covers - see embedded_kotlin/README.md
+# for the full writeup of both mechanisms and why both exist.
 file(GLOB _aapt2_aars "${KONATIVE_AAPT2_AAR_DIR}/*.aar")
 if(NOT _aapt2_aars)
   message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: no .aar files found in KONATIVE_AAPT2_AAR_DIR (${KONATIVE_AAPT2_AAR_DIR})")
@@ -218,6 +219,20 @@ file(GLOB_RECURSE _aapt2_java_files "${_aapt2_link_dir}/java/*.java")
 if(NOT _aapt2_java_files)
   message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: aapt2 link reported success but produced zero R.java files under ${_aapt2_link_dir}/java")
 endif()
+
+# Real, general resources.arsc extraction: ${_aapt2_link_dir}/linked.apk (the -o output above) is a
+# genuine, complete, correctly-populated APK-shaped zip - confirmed via a real `aapt2 dump resources`
+# on this exact output (real typed entries, real localized string values, including the fields
+# embedded_kotlin/KonativeResourceStringOverride.kt's own comment documents) - not a throwaway
+# intermediate. resources.arsc is stored UNCOMPRESSED inside it (standard aapt2 behavior, needed so
+# the OS can mmap it directly), so a plain zip member extraction is all that's needed, no special
+# decompression handling.
+set(_aapt2_linked_apk "${_aapt2_link_dir}/linked.apk")
+file(ARCHIVE_EXTRACT INPUT "${_aapt2_linked_apk}" DESTINATION "${_aapt2_link_dir}/extracted" PATTERNS "resources.arsc")
+if(NOT EXISTS "${_aapt2_link_dir}/extracted/resources.arsc")
+  message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: aapt2 link reported success but ${_aapt2_linked_apk} has no resources.arsc member")
+endif()
+file(RENAME "${_aapt2_link_dir}/extracted/resources.arsc" "${KONATIVE_RESOURCES_ARSC_FILE}")
 
 # No -bootclasspath: confirmed by direct inspection that aapt2's generated R.java files have zero
 # android.* imports (they're pure nested classes of int/String constants) - a real, reproduced

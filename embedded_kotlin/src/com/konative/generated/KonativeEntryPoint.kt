@@ -2,6 +2,7 @@ package com.konative.generated
 
 import android.app.Activity
 import android.app.Application
+import android.content.Context
 import android.os.Bundle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -25,15 +26,21 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import java.nio.ByteBuffer
 
 // The one entry point src/platform/android/jni_onload.cpp's InMemoryDexClassLoader-loaded class
 // resolves and calls (ARCHITECTURE.md section 6.4 step 3 / research/jni_activity_bootstrap_research.md
 // section 5.2 - implemented against that design directly, not re-derived). Everything past
 // JNI_OnLoad's one CallStaticVoidMethod handoff is real, compiled Kotlin from here on - no further
 // JNI reflection, per this project's own "favor real Kotlin over reflection" rule.
+//
+// install(Application, ByteBuffer?)'s SECOND parameter (added alongside the general resources.arsc
+// mechanism - see KonativeResourcesLoader.kt) is the embedded resources.arsc blob, or null if its
+// own SHA-256 self-check failed at JNI_OnLoad - jni_onload.cpp's own kEntryPointClass contract note
+// must stay in sync with this exact signature, per embedded_kotlin/README.md's Hard Rule.
 object KonativeEntryPoint {
     @JvmStatic
-    fun install(application: Application) {
+    fun install(application: Application, resourcesArscBuffer: ByteBuffer?) {
         application.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             private var owner: ComposeHostOwner? = null
 
@@ -42,13 +49,9 @@ object KonativeEntryPoint {
                 owner = ComposeHostOwner().apply { performRestore(savedInstanceState) }
                 owner!!.registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
 
-                // See KonativeResourceStringOverride.kt's own top comment for the real, live bug
-                // this works around and why wrapping the Context here (once, before ComposeView
-                // construction) is sufficient.
-                val resourceOverrideContext = wrapContextForResourceStringOverride(activity)
-                konativeResourceStringOverrideSelfCheck(resourceOverrideContext)
+                val composeContext = installResourcesAndGetComposeContext(activity, resourcesArscBuffer)
 
-                val composeView = ComposeView(resourceOverrideContext).apply {
+                val composeView = ComposeView(composeContext).apply {
                     setViewTreeLifecycleOwner(owner)
                     setViewTreeViewModelStoreOwner(owner)
                     setViewTreeSavedStateRegistryOwner(owner)
@@ -82,6 +85,24 @@ object KonativeEntryPoint {
             }
         })
     }
+}
+
+// Selects between the two real resources.arsc mechanisms (see embedded_kotlin/README.md's Update
+// sections for the full writeup of both): the general, API-30+ ResourcesLoader mechanism
+// (KonativeResourcesLoader.kt) if it installs successfully - which mutates the real Activity's own
+// Resources in place, so the real, unwrapped `activity` is returned as-is, no wrapping needed - or
+// KonativeResourceStringOverride.kt's smaller, scoped Context/Resources-wrapper patch as the
+// fallback (API <30, or the general mechanism failed for any reason at runtime). Only runs the
+// scoped patch's OWN self-check in the fallback branch - the general mechanism's real, localized
+// values would legitimately not match that self-check's hardcoded English expectations, even when
+// working correctly.
+private fun installResourcesAndGetComposeContext(activity: Activity, resourcesArscBuffer: ByteBuffer?): Context {
+    if (tryInstallGeneralResourcesLoader(activity, resourcesArscBuffer)) {
+        return activity
+    }
+    val resourceOverrideContext = wrapContextForResourceStringOverride(activity)
+    konativeResourceStringOverrideSelfCheck(resourceOverrideContext)
+    return resourceOverrideContext
 }
 
 // Fabricates the LifecycleOwner/ViewModelStoreOwner/SavedStateRegistryOwner trio a plain Activity

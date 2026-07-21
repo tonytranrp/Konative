@@ -90,9 +90,10 @@ set, used to generate real AAPT2-linked resource classes (`embedded_kotlin/READM
 `-PkonativeEmbeddedDexPath=<path to a real classes.dex>` (or the `KONATIVE_EMBEDDED_DEX_PATH` env
 var) remains available as a manual override — set it to skip the automated pipeline entirely and
 embed a hand-built or pre-built dex instead (containing a
-`com.konative.generated.KonativeEntryPoint` class with a `@JvmStatic install(Application)` static
-method, which `src/platform/android/jni_onload.cpp` calls). Useful on a machine without kotlinc/r8
-installed at all.
+`com.konative.generated.KonativeEntryPoint` class with a `@JvmStatic install(Application,
+ByteBuffer?)` static method — the second parameter is the embedded resources.arsc blob, `null` is a
+valid value if you don't have one — which `src/platform/android/jni_onload.cpp` calls). Useful on a
+machine without kotlinc/r8/aapt2 installed at all.
 
 One more optional `-P`/env-var override exists for the same reason `CMakeUserPresets.json` exists
 for the standalone `cmake --preset` flow (see `BUILDING.md`) — a machine-local escape hatch that

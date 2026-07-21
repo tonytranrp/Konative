@@ -35,12 +35,13 @@
 # hands to a runtime classpath resolution) - see embedded_kotlin/README.md's Status section for how
 # this directory is currently assembled and pointed at via KONATIVE_AAPT2_AAR_DIR.
 #
-# NOTE on what this does and does not fix (see embedded_kotlin/README.md's Status section for the
-# full writeup): this gets real, AAPT2-assigned values for every field embedded_kotlin/r_shim/ used
-# to hand-shim, fully solving the build-time/classload-time correctness problem r_shim/ existed for.
-# It does NOT get a real resources.arsc table packaged anywhere this framework's runtime Resources
-# object can see - so Resources.getString()-backed fields (R$string/R$style/R$styleable/etc.) still
-# won't resolve at true runtime. That is a separate, deeper, deliberately-deferred problem.
+# NOTE on what this fixes (see embedded_kotlin/README.md's Status section for the full writeup):
+# real, AAPT2-assigned values for every field embedded_kotlin/r_shim/ used to hand-shim (build-time/
+# classload-time correctness), AND - since aapt2 link's own -o output already contains a complete,
+# real resources.arsc, now kept instead of discarded - a second embedded blob feeding the general
+# Resources.getString()/ResourcesLoader runtime mechanism (API 30+,
+# embedded_kotlin/KonativeResourcesLoader.kt), with embedded_kotlin/KonativeResourceStringOverride
+# .kt's smaller, scoped patch as the fallback below that API floor.
 #
 # Requires five machine-local toolchain cache variables/environment variables, following the exact
 # same pattern as ANDROID_NDK_HOME/CMakeUserPresets.json (see that file and
@@ -181,6 +182,7 @@ function(konative_embed_kotlin_dex TARGET_NAME)
 
   set(_gen_dir "${CMAKE_CURRENT_BINARY_DIR}/konative_embed_kotlin_dex/${TARGET_NAME}")
   set(_dex_file "${_gen_dir}/dex/classes.dex")
+  set(_resources_arsc_file "${_gen_dir}/resources.arsc")
   file(MAKE_DIRECTORY "${_gen_dir}")
 
   # Tracked as an explicit DEPENDS input (not just read at build time) so adding/removing/updating
@@ -191,7 +193,7 @@ function(konative_embed_kotlin_dex TARGET_NAME)
   file(GLOB _aapt2_aar_dir_contents "${ARG_AAPT2_AAR_DIR}/*.aar")
 
   add_custom_command(
-    OUTPUT "${_dex_file}"
+    OUTPUT "${_dex_file}" "${_resources_arsc_file}"
     COMMAND "${CMAKE_COMMAND}"
             "-DKONATIVE_KOTLINC=${KONATIVE_KOTLINC}"
             "-DKONATIVE_COMPOSE_PLUGIN=${_compose_plugin}"
@@ -207,15 +209,16 @@ function(konative_embed_kotlin_dex TARGET_NAME)
             "-DKONATIVE_SOURCES=${ARG_SOURCES}"
             "-DKONATIVE_GEN_DIR=${_gen_dir}"
             "-DKONATIVE_DEX_FILE=${_dex_file}"
+            "-DKONATIVE_RESOURCES_ARSC_FILE=${_resources_arsc_file}"
             -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/KonativeCompileKotlinDex.cmake"
     DEPENDS ${ARG_SOURCES} "${ARG_PG_CONF}" ${_aapt2_aar_dir_contents} "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/KonativeCompileKotlinDex.cmake"
     COMMENT "konative: compiling+dexing ${ARG_SYMBOL} (kotlinc + aapt2 -> r8) from ${CMAKE_CURRENT_FUNCTION_LIST_DIR}"
     VERBATIM)
 
-  # A real target (not just the OUTPUT file) so `cmake --build --target <name>_kotlin_dex` can
+  # A real target (not just the OUTPUT files) so `cmake --build --target <name>_kotlin_dex` can
   # rebuild just the Kotlin half for fast iteration, and so <target>'s own dependency edge is
-  # explicit rather than implied only through target_sources() picking up the generated .S file.
-  add_custom_target(${TARGET_NAME}_kotlin_dex DEPENDS "${_dex_file}")
+  # explicit rather than implied only through target_sources() picking up the generated .S files.
+  add_custom_target(${TARGET_NAME}_kotlin_dex DEPENDS "${_dex_file}" "${_resources_arsc_file}")
   add_dependencies(${TARGET_NAME} ${TARGET_NAME}_kotlin_dex)
 
   set(_verify_sha256_arg "")
@@ -226,5 +229,18 @@ function(konative_embed_kotlin_dex TARGET_NAME)
     BLOB "${_dex_file}"
     SYMBOL "${ARG_SYMBOL}"
     ${_verify_sha256_arg}
+  )
+  # Sibling blob, same mechanism, real values confirmed via a real `aapt2 dump resources` on this
+  # exact output (KonativeCompileKotlinDex.cmake's own comment) - feeds the general
+  # ResourcesLoader-based runtime mechanism (embedded_kotlin/KonativeResourcesLoader.kt, API 30+),
+  # never required to exist by anything below that API floor (KonativeResourceStringOverride.kt's
+  # scoped patch remains the fallback there) - always embedded regardless, since it costs a fixed,
+  # small size (a single resources.arsc for this dependency closure, not per-consumer) and one
+  # binary artifact is simpler to reason about than a config that sometimes has it and sometimes
+  # doesn't.
+  konative_embed_binary_blob(${TARGET_NAME}
+    BLOB "${_resources_arsc_file}"
+    SYMBOL "${ARG_SYMBOL}_resources"
+    VERIFY_SHA256
   )
 endfunction()

@@ -18,12 +18,17 @@ screenshot proof, not just a compile-clean claim.
   plugin. `testapp/` itself owns exactly one file,
   `testapp/app/src/main/java/com/konative/testapp/MainActivity.kt`, and nothing here may ever be
   added to it.
-- **`com.konative.generated.KonativeEntryPoint`'s `@JvmStatic install(Application)` is the ONLY
-  contract `jni_onload.cpp` depends on** (exact signature:
-  `(Landroid/app/Application;)V`, looked up via `GetStaticMethodID`/`CallStaticVoidMethod`). Don't
-  rename the class, package, or method without updating `jni_onload.cpp`'s `kEntryPointClass`
-  constant and this contract note together, in the same commit.
-- **No further JNI/reflection past the one `install(Application)` handoff.** Everything here is real
+- **`com.konative.generated.KonativeEntryPoint`'s `@JvmStatic install(Application, ByteBuffer?)` is
+  the ONLY contract `jni_onload.cpp` depends on** (exact signature:
+  `(Landroid/app/Application;Ljava/nio/ByteBuffer;)V`, looked up via
+  `GetStaticMethodID`/`CallStaticVoidMethod`; the second parameter is the embedded resources.arsc
+  blob, or `null` if its own SHA-256 self-check failed - see `KonativeResourcesLoader.kt`). Don't
+  change this signature (or rename the class/package/method) without updating `jni_onload.cpp`'s
+  `GetStaticMethodID` signature string, `embedded_kotlin/r8-rules.pro`'s matching `-keep` rule (a
+  real, once-reproduced bug: a stale `-keep` signature doesn't "keep the method anyway," it simply
+  stops matching, and R8 strips the real method exactly as if there were no rule at all), and this
+  contract note - all together, in the same commit.
+- **No further JNI/reflection past the one `install(...)` handoff.** Everything here is real
   compiled Kotlin — `Application.ActivityLifecycleCallbacks`, manual `LifecycleOwner`/
   `ViewModelStoreOwner`/`SavedStateRegistryOwner` wiring (`ComposeHostOwner`), `ComposeView` —
   matching `research/jni_activity_bootstrap_research.md` section 3.3's "favor real Kotlin over
@@ -234,6 +239,68 @@ so nothing currently exercises any field beyond the two already patched. Revisit
 real composable actually needs it (Material3, `Tab`/`Switch`/`Dialog` semantics, custom XML fonts) —
 implementing the general mechanism speculatively, before anything needs it, would be exactly the kind
 of untested, unneeded infrastructure this project's own standing engineering discipline argues against.
+
+## Update (2026-07-21) — the general mechanism landed too: real, complete, correctly-localized resources.arsc now backs the runtime `Resources` object on API 30+
+
+**The general mechanism designed above is now built and verified on real hardware, not deferred
+anymore** — the actual trigger was simply that there was real, uncommitted engineering time
+available and the design was already fully validated; this isn't a response to a new composable
+actually needing it yet (that still hasn't happened), just closing out well-scoped, already-designed
+work rather than leaving it sitting as a plan indefinitely.
+
+**What changed, concretely**:
+- `KonativeCompileKotlinDex.cmake`'s Step 1.5 now extracts `resources.arsc` from the `aapt2 link`
+  `-o linked.apk` output it already produces (previously discarded after harvesting only `R.java`)
+  into a new required output, `KONATIVE_RESOURCES_ARSC_FILE`.
+- `KonativeEmbedKotlinDex.cmake` embeds it as a second `.incbin` blob, sibling to the dex blob
+  (`${SYMBOL}_resources`, same `konative_embed_binary_blob()` mechanism, same build-time SHA-256
+  self-check).
+- `jni_onload.cpp` self-checks this second blob too — **non-fatally**, unlike the dex blob: a
+  corrupted/missing resources blob degrades to Kotlin receiving `null` and falling back to the
+  scoped patch, it does not refuse to load the whole app the way a corrupted dex does.
+- `KonativeEntryPoint.install()`'s signature changed from `(Application)` to `(Application,
+  ByteBuffer?)` — the embedded resources.arsc bytes, or `null` on self-check failure. See this
+  file's own Hard Rules section for the updated contract note.
+- New `KonativeResourcesLoader.kt`: `tryInstallGeneralResourcesLoader()` implements the real,
+  public, API-30+ mechanism (`android.system.Os.memfd_create()` → `Os.write()` → `Os.lseek()` →
+  `ParcelFileDescriptor.dup()` → `ResourcesProvider.loadFromTable()` → `ResourcesLoader
+  .addProvider()` → `activity.resources.addLoaders()`), then self-checks its own result
+  (`Resources.getString()` on a known field must not throw) before reporting success.
+- `KonativeEntryPoint.kt` now selects between the two mechanisms per real Activity
+  (`installResourcesAndGetComposeContext()`): the general mechanism first (mutates the real
+  Activity's own `Resources` in place, so the real, unwrapped `Activity` is used as-is, no wrapping
+  needed) — falling back to `KonativeResourceStringOverride.kt`'s scoped `Context`/`Resources`
+  wrapper (API <30, or the general mechanism fails for any reason at runtime). Only the fallback
+  branch runs the scoped patch's own self-check — the general mechanism's real, correctly-localized
+  values would legitimately not match that self-check's hardcoded English expectations even when
+  working perfectly.
+
+**One real bug found and fixed while landing this, worth remembering**: `embedded_kotlin/r8-rules
+.pro`'s existing `-keep` rule for `KonativeEntryPoint.install()` specified the OLD, one-parameter
+signature — changing `install()`'s real signature without updating that rule in the same commit
+made R8 silently stop matching it (a `-keep` rule with a stale signature doesn't "keep the method
+under its new shape," it simply matches nothing, and R8 strips the real, unmatched method exactly as
+if there were no rule at all). Real on-device symptom, exactly as predicted:
+`GetStaticMethodID(install)` threw `NoSuchMethodError`. Fixed by updating the rule's signature to
+match; re-verified clean afterward. This is the same class of "keep-rule-signature must track the
+real method exactly" lesson as `jni/README.md`'s existing contract-note discipline, now stated
+explicitly in the `-keep` rule's own comment too.
+
+**Verified on real physical hardware** (`R3GL10AHL7P`, API 36 — comfortably above the API-30 floor),
+both branches, each proven independently:
+- **The general mechanism**: real device logcat shows `tryInstallGeneralResourcesLoader: real
+  resources.arsc loaded and verified successfully (API 36)` — meaning `Resources.getString()` on a
+  real, previously-broken field now resolves through the real, complete, correctly-populated table,
+  not just that `addLoaders()` didn't throw. Correct on-screen render, no regression, no crash
+  anywhere in the log.
+- **The fallback path**: temporarily forced `tryInstallGeneralResourcesLoader()` to return `false`
+  unconditionally, rebuilt, redeployed — confirmed the scoped patch's own self-check activated and
+  passed silently (matching its own already-established, independently-verified behavior), correct
+  render, no regression. Reverted before committing.
+
+LDPlayer was not reachable during this specific round (not running) — not treated as a blocker, since
+this whole mechanism is pure managed Kotlin/Android-framework-API logic with no ABI-specific
+behavior, same reasoning as the scoped patch's own earlier physical-hardware-pending note.
 
 ## Adding to this folder
 

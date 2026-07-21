@@ -11,9 +11,18 @@
 
 # --- Konative's own entry point - called only via JNI reflection (GetStaticMethodID +
 # CallStaticVoidMethod from src/platform/android/jni_onload.cpp), invisible to R8's static call
-# graph, so it must be kept explicitly or R8 treats it as dead code and strips it. ---
+# graph, so it must be kept explicitly or R8 treats it as dead code and strips it. Real, reproduced
+# bug once already: this rule's own signature must match install()'s REAL current signature exactly
+# - a -keep rule with a stale signature doesn't "keep the method under a different shape," it simply
+# doesn't match anything, and R8 strips the real (unmatched) method same as if there were no rule at
+# all. Hit this directly when install() grew a second parameter (ByteBuffer?, for the general
+# resources.arsc mechanism, KonativeResourcesLoader.kt) without updating this line in the same
+# change - real on-device symptom: GetStaticMethodID(install) throws NoSuchMethodError. Whoever
+# next changes install()'s signature must update this line and jni_onload.cpp's own
+# GetStaticMethodID signature string together, in the same commit - matches
+# embedded_kotlin/README.md's existing Hard Rule for this exact contract. ---
 -keep class com.konative.generated.KonativeEntryPoint {
-    public static void install(android.app.Application);
+    public static void install(android.app.Application, java.nio.ByteBuffer);
 }
 -keep class com.konative.generated.KonativeEntryPointKt { *; }
 

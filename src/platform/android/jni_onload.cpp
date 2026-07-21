@@ -18,6 +18,16 @@ extern const unsigned char konative_app_dex_start[];
 extern const unsigned char konative_app_dex_end[];
 extern const uint64_t konative_app_dex_size;
 extern const unsigned char konative_app_dex_expected_sha256[32];
+
+// Sibling blob, same .incbin mechanism (KonativeEmbedBlob.cmake), the real resources.arsc
+// KonativeCompileKotlinDex.cmake's Step 1.5 now keeps instead of discarding - feeds the general,
+// API-30+ ResourcesLoader runtime mechanism (embedded_kotlin/KonativeResourcesLoader.kt). Unlike the
+// dex blob's self-check, a failure here is NON-fatal to the whole load (see below) - it only means
+// that one enhancement doesn't activate, not that the app itself can't start.
+extern const unsigned char konative_app_dex_resources_start[];
+extern const unsigned char konative_app_dex_resources_end[];
+extern const uint64_t konative_app_dex_resources_size;
+extern const unsigned char konative_app_dex_resources_expected_sha256[32];
 }
 
 namespace {
@@ -58,17 +68,46 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
         return JNI_VERSION_1_6;
     }
 
+    // Step 5.5: self-check + hand off the sibling resources.arsc blob - NON-fatal on failure,
+    // unlike the dex blob's own self-check above: this only feeds an optional runtime enhancement
+    // (embedded_kotlin/KonativeResourcesLoader.kt's API-30+ ResourcesLoader mechanism), never the
+    // core load path, so a corrupted/missing copy degrades to Kotlin receiving `null` and falling
+    // back to the always-available scoped patch (embedded_kotlin/KonativeResourceStringOverride
+    // .kt) instead of refusing to load the whole app the dex blob's own failure would warrant.
+    std::span<const unsigned char> resources_bytes(
+        konative_app_dex_resources_start,
+        static_cast<std::size_t>(konative_app_dex_resources_size));
+    auto verified_resources =
+        konative::embed::verify_blob(resources_bytes, konative_app_dex_resources_expected_sha256);
+    jobject resources_buffer = nullptr;
+    if (!verified_resources) {
+        konative::core::log_error(
+            "JNI_OnLoad: embedded resources.arsc blob failed its SHA-256 self-check - continuing "
+            "without it (Kotlin falls back to the scoped resource-string override).");
+    } else {
+        resources_buffer = env->NewDirectByteBuffer(
+            const_cast<unsigned char*>(verified_resources.value().data()),
+            static_cast<jlong>(verified_resources.value().size()));
+        if (konative::jni::check_and_clear_exception(env, "NewDirectByteBuffer(resources.arsc)") ||
+            resources_buffer == nullptr) {
+            konative::core::log_error(
+                "JNI_OnLoad: NewDirectByteBuffer(resources.arsc) failed - continuing without it.");
+            resources_buffer = nullptr;
+        }
+    }
+
     // Step 6: ONE handoff call, then native code is done - everything past this point (Compose
     // wiring, ActivityLifecycleCallbacks) is real, compiled Kotlin (ARCHITECTURE.md section 6.4).
     jmethodID install = env->GetStaticMethodID(loaded.value().clazz.get(), "install",
-                                                 "(Landroid/app/Application;)V");
+                                                 "(Landroid/app/Application;Ljava/nio/ByteBuffer;)V");
     if (konative::jni::check_and_clear_exception(env, "GetStaticMethodID(install)") ||
         install == nullptr) {
-        konative::core::log_error("JNI_OnLoad: {} has no install(Application) static method",
+        konative::core::log_error("JNI_OnLoad: {} has no install(Application, ByteBuffer) static method",
                                    kEntryPointClass);
         return JNI_VERSION_1_6;
     }
-    env->CallStaticVoidMethod(loaded.value().clazz.get(), install, loaded.value().application.get());
+    env->CallStaticVoidMethod(loaded.value().clazz.get(), install, loaded.value().application.get(),
+                               resources_buffer);
     konative::jni::check_and_clear_exception(env, "CallStaticVoidMethod(install)");
 
     // `loaded.value()`'s GlobalRefs (clazz, application) are deliberately never reset(env)'d here -
