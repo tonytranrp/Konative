@@ -402,10 +402,21 @@ unless `KONATIVE_EMBEDDED_DEX_PATH` is set (a manual-override escape hatch, stil
 branch also embeds a real resources.arsc if `KONATIVE_EMBEDDED_RESOURCES_ARSC_PATH` is set, or a
 real empty placeholder otherwise, so it keeps linking now that the automated path embeds a second,
 sibling blob too — see `testapp/README.md`).
-Requires three machine-local toolchain paths (`KONATIVE_KOTLINC`, `KONATIVE_R8`,
-`KONATIVE_ANDROID_JAR`) plus `KONATIVE_KOTLIN_CLASSPATH_DIR` (a pre-resolved dependency-jar
-directory — real Maven resolution from CMake is still not solved, see below), set the same way
-`ANDROID_NDK_HOME` already is (`CMakeUserPresets.json`, machine-local, gitignored).
+Requires five machine-local toolchain paths (`KONATIVE_KOTLINC`, `KONATIVE_R8`,
+`KONATIVE_ANDROID_JAR`, `KONATIVE_AAPT2`, `KONATIVE_JAVAC`) plus `KONATIVE_KOTLIN_CLASSPATH_DIR`/
+`KONATIVE_AAPT2_AAR_DIR` (pre-resolved dependency-jar/AAR directories — real Maven resolution from
+CMake is still not solved, see below), set the same way `ANDROID_NDK_HOME` already is
+(`CMakeUserPresets.json`, machine-local, gitignored). **Auto-discovery landed** (2026-07-22,
+`KonativeEmbedKotlinDex.cmake`): any of the five left unset falls back to real discovery rather than
+a hard `FATAL_ERROR` — `KONATIVE_ANDROID_JAR`/`KONATIVE_AAPT2`/`KONATIVE_R8` scan `$ENV{ANDROID_HOME}`
+(or `$ENV{ANDROID_SDK_ROOT}`) for the newest installed platform/build-tools version,
+`KONATIVE_JAVAC` uses `find_package(Java)`, `KONATIVE_KOTLINC` uses a bare `find_program()`. Verified
+via a real configure (a scratch build directory, only `KONATIVE_KOTLINC` plus the two directory
+variables set manually, the other four left unset): the function ran cleanly past every toolchain
+check, and `Java_JAVAC_EXECUTABLE`/the discovered SDK paths matched `CMakeUserPresets.json`'s
+already-known-correct values exactly. `KONATIVE_KOTLINC` has no comparable env-var convention to
+discover through (Kotlin has no `ANDROID_HOME`-style standard), so it still usually needs a manual
+override — the other four are now genuinely optional on a machine with a normal Android SDK layout.
 **Verified end-to-end, not just "the script exits 0"**: a real `cmake --build`, and separately a
 real `./gradlew assembleDebug` (via `testapp/`'s own `externalNativeBuild`, with the new toolchain
 paths forwarded as Gradle properties), both produced a working `.so`, installed and rendered

@@ -56,6 +56,16 @@
 #                             generated R.java output
 #   KONATIVE_KOTLIN_CLASSPATH_DIR - default for CLASSPATH_DIR if the caller doesn't pass one explicitly
 #   KONATIVE_AAPT2_AAR_DIR  - default for AAPT2_AAR_DIR if the caller doesn't pass one explicitly
+#
+# Any of the five machine-local variables left unset falls back to real auto-discovery below (never
+# overrides an explicit value - CMakeUserPresets.json stays authoritative wherever it already sets
+# one): KONATIVE_ANDROID_JAR/KONATIVE_AAPT2/KONATIVE_R8 scan $ENV{ANDROID_HOME} (or
+# $ENV{ANDROID_SDK_ROOT}) for the newest platforms/android-*/build-tools/* directory present;
+# KONATIVE_JAVAC uses find_package(Java); KONATIVE_KOTLINC uses a bare find_program() (kotlinc has no
+# ANDROID_HOME-style well-known env var, so this one's real-world hit rate is low - most machines
+# will still need it set explicitly). Verified empirically (a standalone `cmake -P` script run
+# against this project's own real SDK install) to reproduce the exact paths CMakeUserPresets.json
+# already has hand-written for android.jar/aapt2/r8/javac before being wired in here.
 
 include_guard(GLOBAL)
 
@@ -103,6 +113,67 @@ function(konative_embed_kotlin_dex TARGET_NAME)
   endif()
   if(NOT TARGET ${TARGET_NAME})
     message(FATAL_ERROR "konative_embed_kotlin_dex(${TARGET_NAME}): no such target - call add_library()/add_executable() before this function")
+  endif()
+
+  # Toolchain auto-discovery - attempted only as a fallback when a manual override (the primary,
+  # always-reliable mechanism: CMakeUserPresets.json, exactly as documented above) isn't already
+  # set. Best-effort, not guaranteed: real-tested against this project's own dev machine before
+  # writing this (a standalone `cmake -P` script run against the real, already-known-correct SDK
+  # install), not assumed to work from CMake/Android conventions alone - confirmed
+  # $ENV{ANDROID_HOME}-based discovery finds the exact real android.jar/aapt2/r8 paths this
+  # project's own CMakeUserPresets.json already has hardcoded, picking the newest
+  # platforms/android-*` and `build-tools/*` version present via CMake's natural-sort `list(SORT
+  # ... COMPARE NATURAL)`. `find_package(Java)` correctly discovers `javac` too. kotlinc has NO
+  # discovery here beyond bare `find_program()`-via-PATH: unlike Android/Java, Kotlin has no
+  # standard "well-known install location" env var convention, and it was confirmed NOT on PATH on
+  # this project's own dev machine even with a real, working kotlinc installed elsewhere - expect
+  # this one specifically to still usually need a manual override.
+  if(NOT KONATIVE_KOTLINC)
+    find_program(KONATIVE_KOTLINC NAMES kotlinc kotlinc.bat)
+  endif()
+  if(NOT KONATIVE_JAVAC)
+    find_package(Java QUIET COMPONENTS Development)
+    if(Java_JAVAC_EXECUTABLE)
+      set(KONATIVE_JAVAC "${Java_JAVAC_EXECUTABLE}")
+    endif()
+  endif()
+  if((NOT KONATIVE_R8 OR NOT KONATIVE_ANDROID_JAR OR NOT KONATIVE_AAPT2) AND
+     (DEFINED ENV{ANDROID_HOME} OR DEFINED ENV{ANDROID_SDK_ROOT}))
+    if(DEFINED ENV{ANDROID_HOME})
+      set(_konative_sdk_root "$ENV{ANDROID_HOME}")
+    else()
+      set(_konative_sdk_root "$ENV{ANDROID_SDK_ROOT}")
+    endif()
+    if(NOT KONATIVE_ANDROID_JAR)
+      file(GLOB _konative_platform_dirs LIST_DIRECTORIES true "${_konative_sdk_root}/platforms/android-*")
+      if(_konative_platform_dirs)
+        list(SORT _konative_platform_dirs COMPARE NATURAL ORDER DESCENDING)
+        list(GET _konative_platform_dirs 0 _konative_newest_platform)
+        if(EXISTS "${_konative_newest_platform}/android.jar")
+          set(KONATIVE_ANDROID_JAR "${_konative_newest_platform}/android.jar")
+        endif()
+      endif()
+    endif()
+    if(NOT KONATIVE_AAPT2)
+      file(GLOB _konative_build_tools_dirs LIST_DIRECTORIES true "${_konative_sdk_root}/build-tools/*")
+      if(_konative_build_tools_dirs)
+        list(SORT _konative_build_tools_dirs COMPARE NATURAL ORDER DESCENDING)
+        list(GET _konative_build_tools_dirs 0 _konative_newest_build_tools)
+        if(EXISTS "${_konative_newest_build_tools}/aapt2.exe")
+          set(KONATIVE_AAPT2 "${_konative_newest_build_tools}/aapt2.exe")
+        elseif(EXISTS "${_konative_newest_build_tools}/aapt2")
+          set(KONATIVE_AAPT2 "${_konative_newest_build_tools}/aapt2")
+        endif()
+      endif()
+    endif()
+    if(NOT KONATIVE_R8)
+      file(GLOB _konative_r8_candidates
+        "${_konative_sdk_root}/cmdline-tools/*/bin/r8.bat"
+        "${_konative_sdk_root}/cmdline-tools/*/bin/r8")
+      if(_konative_r8_candidates)
+        list(GET _konative_r8_candidates 0 KONATIVE_R8)
+      endif()
+    endif()
   endif()
 
   if(NOT KONATIVE_KOTLINC)
