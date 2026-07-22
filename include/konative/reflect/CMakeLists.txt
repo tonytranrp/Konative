@@ -7,7 +7,9 @@ target_sources(konative_reflect INTERFACE
   FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/component_traits.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/meta_registry.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pfr_auto_registration.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pfr_auto_registration_self_check.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/detail/registration_thunk.hpp
 )
 
-target_link_libraries(konative_reflect INTERFACE konative::core EnTT::EnTT)
+target_link_libraries(konative_reflect INTERFACE konative::core EnTT::EnTT Boost::pfr)

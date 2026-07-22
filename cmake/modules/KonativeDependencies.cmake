@@ -19,6 +19,27 @@ if(EnTT_ADDED AND NOT TARGET EnTT)
   target_compile_features(EnTT INTERFACE cxx_std_20)
 endif()
 
+# --- Boost.PFR: aggregate reflection (field count/values/names), for entt::meta auto-registration ---
+# DOWNLOAD_ONLY, same reason as EnTT above: PFR's own CMakeLists.txt (verified directly, 2026-07-22)
+# is written for the Boost superproject build (project(... VERSION "${BOOST_SUPERPROJECT_VERSION}")),
+# not standalone consumption - that variable is never set outside the full boostorg/boost monorepo,
+# so letting CPM configure it directly would be a real, avoidable risk for a header-only library
+# that needs nothing from its own CMakeLists.txt. boost-1.91.0, not a newer beta tag (boostorg/pfr's
+# own tag history has beta-suffixed releases past this) - matching this project's own established
+# "pin a real stable release, not the newest tag" convention (see glaze's tag-history comment below).
+CPMAddPackage(
+  NAME pfr
+  GITHUB_REPOSITORY boostorg/pfr
+  GIT_TAG boost-1.91.0
+  DOWNLOAD_ONLY YES
+)
+if(pfr_ADDED AND NOT TARGET boost_pfr)
+  add_library(boost_pfr INTERFACE)
+  add_library(Boost::pfr ALIAS boost_pfr)
+  target_include_directories(boost_pfr SYSTEM INTERFACE "${pfr_SOURCE_DIR}/include")
+  target_compile_features(boost_pfr INTERFACE cxx_std_20)
+endif()
+
 # --- GLM: math (vectors/matrices) ---
 CPMAddPackage(
   NAME glm

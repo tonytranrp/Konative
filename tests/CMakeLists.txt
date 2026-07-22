@@ -14,6 +14,7 @@ add_executable(konative_tests
   test_glm_storage.cpp
   test_world.cpp
   test_spsc_event_queue.cpp
+  test_pfr_auto_registration.cpp
 )
 target_link_libraries(konative_tests PRIVATE konative::konative doctest::doctest)
 konative_apply_warnings(konative_tests)

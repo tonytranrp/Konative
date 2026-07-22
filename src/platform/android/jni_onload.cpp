@@ -27,6 +27,7 @@
 #include "konative/events/window/WindowResizedEvent.hpp"
 #include "konative/jni/dex_loader.hpp"
 #include "konative/reflect/meta_registry.hpp"
+#include "konative/reflect/pfr_auto_registration_self_check.hpp"
 #include "konative/scheduling/cross_thread_event_queue.hpp"
 #include "konative/scheduling/spsc_event_queue_self_check.hpp"
 #include "konative/scheduling/taskflow_self_check.hpp"
@@ -224,6 +225,22 @@ public:
                 "KonativeAndroidApp: EnTT snapshot + cereal self-check FAILED on this device/ABI - "
                 "a real save/restore round-trip produced a wrong result. Nothing else in this app "
                 "currently depends on this, but confirms a real problem on this specific target.");
+        }
+
+        // Boost.PFR + entt::meta field auto-registration - ARCHITECTURE.md section 9's
+        // explicitly-flagged "genuinely unproven" pairing (a real spike/prototype needed before
+        // committing further architecture on top of the assumption it works). Same permanent
+        // regression-guard-at-real-startup pattern as every other self-check here.
+        bool pfr_auto_registration_ok = konative::reflect::run_pfr_auto_registration_self_check();
+        if (pfr_auto_registration_ok) {
+            konative::core::log_info(
+                "KonativeAndroidApp: Boost.PFR + entt::meta auto-registration self-check PASSED on "
+                "this device/ABI - real field enumeration/get/set round-trip confirmed correct.");
+        } else {
+            konative::core::log_error(
+                "KonativeAndroidApp: Boost.PFR + entt::meta auto-registration self-check FAILED on "
+                "this device/ABI. Nothing else in this app currently depends on this, but confirms "
+                "a real problem on this specific target.");
         }
 
         // Real ECS proof, the one piece Dispatcher/events + the tick driver + Taskflow above didn't
