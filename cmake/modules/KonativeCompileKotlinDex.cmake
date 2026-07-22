@@ -44,15 +44,31 @@ endif()
 # MSYS_NO_PATHCONV=1, which did not fix it). One argument per line in the file sidesteps whatever
 # is actually mis-parsing this, entirely.
 #
-# Plain ";" here, NOT the "\;" CMake list-separator escape - this string is going straight into a
-# FILE's contents (not being re-parsed as a CMake argument/list anywhere downstream), so "\;" would
-# be wrong: a real, reproduced bug caught by this module's own smoke test - "\;" left a literal
-# backslash in the argfile ("jar1\;jar2\;...") which kotlinc's classpath parser doesn't recognize
-# as a separator at all, silently resolving zero classpath entries (surfaced as "unresolved
-# reference" on plain android.os.Bundle/Activity, not a classpath-specific error).
+# Plain ";"/":" here, NOT the "\;" CMake list-separator escape - this string is going straight into
+# a FILE's contents (not being re-parsed as a CMake argument/list anywhere downstream), so "\;"
+# would be wrong: a real, reproduced bug caught by this module's own smoke test - "\;" left a
+# literal backslash in the argfile ("jar1\;jar2\;...") which kotlinc's classpath parser doesn't
+# recognize as a separator at all, silently resolving zero classpath entries (surfaced as
+# "unresolved reference" on plain android.os.Bundle/Activity, not a classpath-specific error).
+#
+# The separator itself is HOST-PLATFORM-DEPENDENT, not always ";" - a real bug found on this
+# project's first real Linux CI run (2026-07-22): kotlinc (a JVM tool) splits -classpath on
+# java.io.File.pathSeparator, which is ";" on Windows but ":" on Linux/macOS; this recipe had only
+# ever run on this project's own Windows dev machine before, so a hardcoded ";" silently produced a
+# SINGLE, nonexistent "path" out of the whole jar list on Linux (every android/androidx import then
+# failed as "unresolved reference", not a classpath-specific error - the same misleading failure
+# shape the comment above already documents for a different real cause). `WIN32`/`UNIX` are real,
+# correct host-platform variables even in `cmake -P` script mode (they reflect whichever machine is
+# actually running the script, not a cross-compilation target) - see also `ANDROID_ABI`/
+# `CMAKE_TOOLCHAIN_FILE` above, which are a DIFFERENT, target-platform axis entirely.
+if(WIN32)
+  set(_kotlinc_classpath_sep ";")
+else()
+  set(_kotlinc_classpath_sep ":")
+endif()
 set(_kotlinc_classpath "")
 foreach(_jar IN LISTS _classpath_jars)
-  string(APPEND _kotlinc_classpath "${_jar};")
+  string(APPEND _kotlinc_classpath "${_jar}${_kotlinc_classpath_sep}")
 endforeach()
 string(APPEND _kotlinc_classpath "${KONATIVE_ANDROID_JAR}")
 
