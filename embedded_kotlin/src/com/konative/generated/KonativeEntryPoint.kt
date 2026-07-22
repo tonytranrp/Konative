@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.Context
 import android.os.Bundle
 import android.util.Log
+import android.view.Choreographer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -69,10 +70,12 @@ object KonativeEntryPoint {
             override fun onActivityResumed(activity: Activity) {
                 owner?.registry?.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
                 dispatchToNative(AndroidLifecycleEvent.RESUMED)
+                FrameTicker.start()
             }
 
             override fun onActivityPaused(activity: Activity) {
                 owner?.registry?.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+                FrameTicker.stop()
                 dispatchToNative(AndroidLifecycleEvent.PAUSED)
             }
 
@@ -97,6 +100,11 @@ object KonativeEntryPoint {
     // AndroidLifecycleEvent enum exactly (see AndroidLifecycleEvent below).
     @JvmStatic
     external fun nativeDispatchLifecycle(event: Int)
+
+    // Same RegisterNatives contract, bound to native_dispatch_tick - one real per-frame heartbeat
+    // for the C++ ECS/systems side, driven by FrameTicker below.
+    @JvmStatic
+    external fun nativeTick(deltaSeconds: Float)
 }
 
 // Mirrors jni_onload.cpp's own AndroidLifecycleEvent enum exactly - both sides must stay in sync.
@@ -120,6 +128,55 @@ private fun dispatchToNative(event: Int) {
     } catch (e: UnsatisfiedLinkError) {
         Log.e("Konative", "dispatchToNative: nativeDispatchLifecycle unavailable (event=$event) - " +
             "the C++ ECS/events core will not see this transition; Compose is unaffected.", e)
+    }
+}
+
+// Drives konative::app::Application::tick() once per real display frame while (and only while) the
+// Activity is genuinely resumed - started/stopped from onActivityResumed/onActivityPaused above,
+// alongside the existing lifecycle dispatch. A SEPARATE mechanism from Compose's own frame
+// scheduling (Compose still owns real rendering) - this exists purely to give the C++ ECS/systems
+// side a real per-frame heartbeat, closing the "World::tick() has no natural driver" gap
+// ARCHITECTURE.md's own status table used to note as still open.
+private object FrameTicker : Choreographer.FrameCallback {
+    private var active = false
+    private var lastFrameTimeNanos = 0L
+
+    fun start() {
+        if (active) return
+        active = true
+        lastFrameTimeNanos = 0L // reset so the delta right after a resume isn't a stale huge gap
+        Choreographer.getInstance().postFrameCallback(this)
+    }
+
+    // Deliberately doesn't call Choreographer.removeFrameCallback(this) - a callback already queued
+    // by the previous doFrame() may still fire once more, but doFrame()'s own `if (!active) return`
+    // makes that one extra firing a clean no-op (it returns before re-posting), which is simpler
+    // than reasoning about removeFrameCallback's own exact queuing semantics for no real benefit.
+    fun stop() {
+        active = false
+    }
+
+    override fun doFrame(frameTimeNanos: Long) {
+        if (!active) return
+        val deltaSeconds = if (lastFrameTimeNanos == 0L) {
+            0f // first frame after start(): no real previous timestamp yet, report 0 not a bogus gap
+        } else {
+            (frameTimeNanos - lastFrameTimeNanos) / 1_000_000_000f
+        }
+        lastFrameTimeNanos = frameTimeNanos
+        dispatchTickToNative(deltaSeconds)
+        Choreographer.getInstance().postFrameCallback(this)
+    }
+}
+
+// Same try/catch-wrapped shape as dispatchToNative() above, for the same reason - see that
+// function's own comment.
+private fun dispatchTickToNative(deltaSeconds: Float) {
+    try {
+        KonativeEntryPoint.nativeTick(deltaSeconds)
+    } catch (e: UnsatisfiedLinkError) {
+        Log.e("Konative", "dispatchTickToNative: nativeTick unavailable - the C++ ECS/systems side " +
+            "will not receive real per-frame ticks; Compose rendering is unaffected.", e)
     }
 }
 

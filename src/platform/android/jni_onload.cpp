@@ -50,11 +50,10 @@ constexpr const char* kEntryPointClass = "com.konative.generated.KonativeEntryPo
 // Deliberately trivial (matches examples/minimal_triangle's own "prove the plumbing, not a real
 // app" scope, ARCHITECTURE.md section 2) - logs on each transition so this is independently
 // verifiable via logcat alone, the same self-checking ethos as every other mechanism in this
-// codebase. World::tick() is deliberately NOT driven by anything here - Compose (JVM-hosted, owns
-// its own frame scheduling) owns real rendering now, and there's no natural per-frame driver for
-// the C++ side in this design yet; a future continuous-tick driver (Choreographer, a dedicated
-// thread, ...) is a real, separate, NOT-yet-decided design question, left undriven on purpose here
-// rather than silently forgotten.
+// codebase. World::tick() is now driven too, via Android's Choreographer (see
+// KonativeEntryPoint.kt's own frame-callback loop and native_dispatch_tick below) - Compose
+// (JVM-hosted) still owns real rendering/frame scheduling; this is a SEPARATE, additive per-frame
+// heartbeat for the C++ ECS/systems side, not a rendering driver.
 class KonativeAndroidApp final : public konative::app::Application {
 public:
     void on_started() override {
@@ -64,6 +63,25 @@ public:
     void on_resumed() override { konative::core::log_info("KonativeAndroidApp: on_resumed"); }
     void on_paused() override { konative::core::log_info("KonativeAndroidApp: on_paused"); }
     void on_destroyed() override { konative::core::log_info("KonativeAndroidApp: on_destroyed"); }
+
+    // Logs a summary every kTickLogInterval frames rather than every single tick (Choreographer
+    // ticks once per display refresh, ~60-120Hz on real hardware - logging every occurrence would
+    // flood logcat for no diagnostic benefit, the same "downgrade high-frequency routine noise to a
+    // periodic summary" lesson this codebase has already re-learned once for a different kind of
+    // per-frame spam). Real proof this is alive: tick_count_ only advances while Choreographer is
+    // actually posting frames, i.e. only while the Activity is genuinely resumed.
+    void on_tick(float delta_seconds) override {
+        ++tick_count_;
+        if (tick_count_ % kTickLogInterval == 0) {
+            konative::core::log_info(
+                "KonativeAndroidApp: on_tick - {} real frames delivered so far (last delta {:.4f}s)",
+                tick_count_, delta_seconds);
+        }
+    }
+
+private:
+    static constexpr std::uint64_t kTickLogInterval = 120; // ~1-2s of real frames on typical hardware
+    std::uint64_t tick_count_ = 0;
 };
 
 // Function-local static, same singleton-via-static pattern examples/minimal_triangle/main.cpp's
@@ -111,6 +129,15 @@ void JNICALL native_dispatch_lifecycle_event(JNIEnv*, jclass, jint event) {
     }
     konative::core::log_error("native_dispatch_lifecycle_event: unknown event id {}",
                                static_cast<int>(event));
+}
+
+// Bound to KonativeEntryPoint.nativeTick(Float) - one real per-frame heartbeat for the C++
+// ECS/systems side (World::tick() -> SystemSequence::run() + Dispatcher::update(), flushing any
+// enqueued - as opposed to triggered - events queued since the last frame). See
+// KonativeEntryPoint.kt's Choreographer.FrameCallback loop for where deltaSeconds is computed and
+// why this only runs while the Activity is genuinely resumed.
+void JNICALL native_dispatch_tick(JNIEnv*, jclass, jfloat delta_seconds) {
+    android_app().tick(delta_seconds);
 }
 
 } // namespace
@@ -183,28 +210,35 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
         }
     }
 
-    // Step 5.6: bind Kotlin's nativeDispatchLifecycle(Int) to native_dispatch_lifecycle_event above
-    // - see KonativeAndroidApp's own comment for why. Deliberately non-fatal on failure, same as the
-    // resources.arsc blob above: this wires a real feature (the C++ ECS/events core actually
+    // Step 5.6: bind Kotlin's nativeDispatchLifecycle(Int)/nativeTick(Float) to the two functions
+    // above - see KonativeAndroidApp's own comment for why. Deliberately non-fatal on failure, same
+    // as the resources.arsc blob above: this wires a real feature (the C++ ECS/events core actually
     // running), but its absence doesn't prevent Compose from rendering - only degrades to the C++
-    // side never seeing lifecycle transitions. Must happen before install() below even though the
-    // very first real call can't arrive until later (an Activity lifecycle event firing is
-    // asynchronous, driven by the real Android framework afterward) - registering natives before
-    // handoff is simply the cleaner ordering, with no dependency on exactly when Kotlin's first
-    // callback fires.
-    JNINativeMethod lifecycle_native{
-        const_cast<char*>("nativeDispatchLifecycle"),
-        const_cast<char*>("(I)V"),
-        reinterpret_cast<void*>(&native_dispatch_lifecycle_event),
+    // side never seeing lifecycle transitions or ticks. Must happen before install() below even
+    // though the very first real call can't arrive until later (an Activity lifecycle event firing,
+    // or Choreographer's first posted frame, are both asynchronous, driven by the real Android
+    // framework afterward) - registering natives before handoff is simply the cleaner ordering, with
+    // no dependency on exactly when Kotlin's first callback fires.
+    JNINativeMethod native_methods[] = {
+        {
+            const_cast<char*>("nativeDispatchLifecycle"),
+            const_cast<char*>("(I)V"),
+            reinterpret_cast<void*>(&native_dispatch_lifecycle_event),
+        },
+        {
+            const_cast<char*>("nativeTick"),
+            const_cast<char*>("(F)V"),
+            reinterpret_cast<void*>(&native_dispatch_tick),
+        },
     };
-    if (env->RegisterNatives(loaded.value().clazz.get(), &lifecycle_native, 1) != JNI_OK ||
-        konative::jni::check_and_clear_exception(env, "RegisterNatives(nativeDispatchLifecycle)")) {
+    if (env->RegisterNatives(loaded.value().clazz.get(), native_methods, 2) != JNI_OK ||
+        konative::jni::check_and_clear_exception(env, "RegisterNatives(nativeDispatchLifecycle/nativeTick)")) {
         konative::core::log_error(
-            "JNI_OnLoad: RegisterNatives(nativeDispatchLifecycle) failed - the C++ ECS/events core "
-            "will not receive real Activity lifecycle transitions this run. Compose rendering is "
-            "unaffected (this native method is unrelated to install()'s own handoff below); Kotlin's "
-            "own nativeDispatchLifecycle() call sites are individually try/caught for exactly this "
-            "case, see KonativeEntryPoint.kt.");
+            "JNI_OnLoad: RegisterNatives(nativeDispatchLifecycle/nativeTick) failed - the C++ "
+            "ECS/events core will not receive real Activity lifecycle transitions or ticks this "
+            "run. Compose rendering is unaffected (these native methods are unrelated to install()'s "
+            "own handoff below); Kotlin's own call sites are individually try/caught for exactly "
+            "this case, see KonativeEntryPoint.kt.");
     }
 
     // Step 6: ONE handoff call, then native code is done - everything past this point (Compose
