@@ -65,11 +65,34 @@ object KonativeEntryPoint {
         application.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             private var owner: ComposeHostOwner? = null
 
+            // Tracks the native STARTED dispatch (real World/ECS construction, every startup
+            // self-check, entity creation - jni_onload.cpp's own on_started()) SEPARATELY from
+            // owner/ComposeView installation below. The native side is only ever meant to run that
+            // one-time setup once per PROCESS, not once per Activity INSTANCE - but a real device
+            // rotation destroys and recreates the Activity (a fresh instance, a fresh, empty
+            // content view) while the process itself keeps running. A single `owner != null` guard
+            // covering both concerns was a real, critical bug (found by a 2026-07-22 deep review,
+            // reproduced by reasoning through testapp/AndroidManifest.xml's real manifest - no
+            // configChanges/screenOrientation override, so a plain rotation genuinely destroys and
+            // recreates MainActivity): rotating the device even once left `owner` pointing at the
+            // now-dead instance's ComposeHostOwner, so the guard silently skipped installing
+            // anything on every Activity created after the first - the entire Compose UI vanished
+            // permanently for the rest of the process's life, with zero error/log signal, while the
+            // native tick/touch/lifecycle machinery kept running underneath as if nothing happened.
+            private var nativeStarted = false
+
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
-                if (owner != null) return // only the first Activity matters for this entry point
+                if (!nativeStarted) {
+                    nativeStarted = true
+                    dispatchToNative(AndroidLifecycleEvent.STARTED)
+                }
+
+                // Runs for EVERY Activity instance, including a post-rotation recreation - each one
+                // gets its own fresh ComposeHostOwner/ComposeView, matching the fact each one starts
+                // with no content view of its own (the previous instance's view tree was destroyed
+                // along with it).
                 owner = ComposeHostOwner().apply { performRestore(savedInstanceState) }
                 owner!!.registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
-                dispatchToNative(AndroidLifecycleEvent.STARTED)
 
                 val composeContext = installResourcesAndGetComposeContext(activity, resourcesArscBuffer)
 
@@ -108,6 +131,13 @@ object KonativeEntryPoint {
 
             override fun onActivityDestroyed(activity: Activity) {
                 owner?.registry?.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+                // MUST reset to null here, or the NEXT Activity instance's onActivityCreated (a
+                // real recreation, e.g. after rotation) would see a stale non-null owner and - back
+                // when a single guard covered both concerns - would incorrectly skip installing a
+                // ComposeView on it. Now purely a hygiene reset (nativeStarted above is what
+                // actually gates re-dispatching STARTED), but still correct to clear: nothing should
+                // hold a reference to a destroyed Activity's owner past this point.
+                owner = null
                 dispatchToNative(AndroidLifecycleEvent.DESTROYED)
             }
         })
@@ -221,12 +251,19 @@ private object FrameTicker : Choreographer.FrameCallback {
         Choreographer.getInstance().postFrameCallback(this)
     }
 
-    // Deliberately doesn't call Choreographer.removeFrameCallback(this) - a callback already queued
-    // by the previous doFrame() may still fire once more, but doFrame()'s own `if (!active) return`
-    // makes that one extra firing a clean no-op (it returns before re-posting), which is simpler
-    // than reasoning about removeFrameCallback's own exact queuing semantics for no real benefit.
+    // DOES call Choreographer.removeFrameCallback(this) - a real 2026-07-22 deep review found the
+    // earlier "just flip the flag, the stale callback's own `if (!active) return` makes it a clean
+    // no-op" reasoning only holds if start() isn't called again before that stale callback fires.
+    // If stop()+start() happen twice within one frame interval (e.g. a fast pause/resume pair during
+    // Activity recreation - the same rotation path Finding 1 above fixes), the still-queued callback
+    // from before stop() and the new one posted by start() both end up pending, and BOTH fire at the
+    // next vsync (Choreographer doesn't deduplicate by callback instance) - permanently doubling the
+    // native tick rate for the rest of the Activity's life, silently, with tickCountDisplay visibly
+    // incrementing by 2 per frame instead of 1. Actually cancelling the pending callback here closes
+    // that window instead of relying on timing (verified real API via javap against android.jar).
     fun stop() {
         active = false
+        Choreographer.getInstance().removeFrameCallback(this)
     }
 
     override fun doFrame(frameTimeNanos: Long) {
