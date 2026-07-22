@@ -12,6 +12,7 @@
 #include "konative/app/application.hpp"
 #include "konative/app/entry_point.hpp"
 #include "konative/core/log.hpp"
+#include "konative/ecs/registry_snapshot_self_check.hpp"
 #include "konative/embed/checked_blob.hpp"
 #include "konative/events/input/TouchDownEvent.hpp"
 #include "konative/events/input/TouchMoveEvent.hpp"
@@ -105,6 +106,22 @@ public:
                 "(nothing else in this app currently depends on Taskflow), but confirms "
                 "ARCHITECTURE.md section 9's flagged risk is real on this specific target - do not "
                 "build further architecture on Taskflow here without investigating first.");
+        }
+
+        // EnTT snapshot + cereal - the "historically-documented snapshot-API pairing" the
+        // dependency stack picked cereal for specifically, unused anywhere in this codebase until
+        // now (confirmed by repo-wide grep before landing this). Same permanent
+        // regression-guard-at-real-startup pattern as the Taskflow self-check above.
+        bool snapshot_ok = konative::ecs::run_registry_snapshot_self_check();
+        if (snapshot_ok) {
+            konative::core::log_info(
+                "KonativeAndroidApp: EnTT snapshot + cereal self-check PASSED on this device/ABI - "
+                "real save/restore round-trip confirmed correct.");
+        } else {
+            konative::core::log_error(
+                "KonativeAndroidApp: EnTT snapshot + cereal self-check FAILED on this device/ABI - "
+                "a real save/restore round-trip produced a wrong result. Nothing else in this app "
+                "currently depends on this, but confirms a real problem on this specific target.");
         }
 
         // Real ECS proof, the one piece Dispatcher/events + the tick driver + Taskflow above didn't
