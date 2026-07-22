@@ -307,6 +307,25 @@ set(_produced_dex "${_dex_dir}/classes.dex")
 if(NOT EXISTS "${_produced_dex}")
   message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: r8 reported success but ${_produced_dex} does not exist")
 endif()
+# r8 silently multidexes (classes.dex, classes2.dex, ...) past the 64K-method-reference limit for a
+# single dex file - no special flag is needed for it to do this, and it still exits 0. Konative's own
+# embedding mechanism (konative::jni::load_class_from_dex(), InMemoryDexClassLoader) only ever
+# accepts ONE dex buffer, so a silent split here would silently drop every class that spilled into
+# classes2.dex+ from the embedded blob entirely - surfacing much later as a confusing
+# NoClassDefFoundError/ClassNotFoundException with no obvious link to "the dependency graph grew too
+# large" (found by a 2026-07-22 deep review; a concrete, anticipated future trigger already named in
+# this codebase: KonativeEntryPoint.kt's own comment about adding a full Material3 design system).
+# Checking for classes2.dex specifically catches a split into any number of files, not just two.
+if(EXISTS "${_dex_dir}/classes2.dex")
+  message(FATAL_ERROR
+    "KonativeCompileKotlinDex.cmake: r8 produced classes2.dex alongside classes.dex - the shrunk "
+    "output no longer fits in a single dex file (past the 64K-method-reference limit), and "
+    "Konative's InMemoryDexClassLoader-based embedding only ever accepts ONE dex buffer. Every "
+    "class r8 placed in classes2.dex (and beyond) would be silently missing from the embedded "
+    "blob. This needs a real fix (reduce the embedded dependency graph, or extend the embedding "
+    "mechanism to accept multiple dex buffers) before proceeding - not something to work around "
+    "here.")
+endif()
 file(RENAME "${_produced_dex}" "${KONATIVE_DEX_FILE}")
 
 message(STATUS "konative: compiled+dexed ${KONATIVE_DEX_FILE}")

@@ -3,6 +3,8 @@
 #include <utility>
 #include <variant>
 
+#include "konative/core/assert.hpp"
+
 namespace konative::core {
 
 // A minimal Result<T, E>, preferred over exceptions at any interop boundary where an unwound C++
@@ -21,10 +23,31 @@ public:
     [[nodiscard]] bool has_value() const noexcept { return storage_.index() == 0; }
     explicit operator bool() const noexcept { return has_value(); }
 
-    [[nodiscard]] T& value() { return std::get<0>(storage_); }
-    [[nodiscard]] const T& value() const { return std::get<0>(storage_); }
-    [[nodiscard]] E& error() { return std::get<1>(storage_); }
-    [[nodiscard]] const E& error() const { return std::get<1>(storage_); }
+    // Real, release-mode-safe guards (KONATIVE_ASSERT, not a raw assert()) against exactly the
+    // hazard this whole type exists to prevent (see the class comment above): calling value() on an
+    // error Result (or vice versa) would otherwise fall through to std::get's own std::
+    // bad_variant_access - a real C++ exception, at exactly the kind of interop boundary this type
+    // was built so callers never have to let one cross. [[nodiscard]] on the class only stops a
+    // caller from discarding the Result entirely; it does nothing to stop a caller who kept it from
+    // skipping the has_value() check before reaching in - found by a 2026-07-22 deep review. Every
+    // current real call site already checks first (confirmed by grep), so this is hardening for the
+    // next call site, not a fix for a live bug.
+    [[nodiscard]] T& value() {
+        KONATIVE_ASSERT(has_value(), "Result<T,E>::value() called on a Result holding an error");
+        return std::get<0>(storage_);
+    }
+    [[nodiscard]] const T& value() const {
+        KONATIVE_ASSERT(has_value(), "Result<T,E>::value() called on a Result holding an error");
+        return std::get<0>(storage_);
+    }
+    [[nodiscard]] E& error() {
+        KONATIVE_ASSERT(!has_value(), "Result<T,E>::error() called on a Result holding a value");
+        return std::get<1>(storage_);
+    }
+    [[nodiscard]] const E& error() const {
+        KONATIVE_ASSERT(!has_value(), "Result<T,E>::error() called on a Result holding a value");
+        return std::get<1>(storage_);
+    }
 
 private:
     template <std::size_t I, typename U>
