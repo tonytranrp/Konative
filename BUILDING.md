@@ -19,6 +19,16 @@ resulting test/example binaries actually run) on 2026-07-17. `android-arm64`/`an
 need a real Android NDK; see `CMakeUserPresets.json` (git-ignored, machine-local — create your own
 pointing at your real NDK/SDK paths; do not commit one).
 
+## Continuous integration
+
+`.github/workflows/desktop-tests.yml` builds and runs the full desktop test suite on every push/PR
+to `main` — a real, hosted-runner check for exactly what this doc's own Quick Start does. It's
+**desktop-only**: the Android presets need a real NDK plus the machine-local toolchain paths
+`CMakeUserPresets.json` provides, which a hosted runner doesn't have without real, separate setup
+work not yet done here. When `ARCHITECTURE.md` says something is "verified in CI," it means this
+workflow, for whatever subset of the desktop test suite actually covers that claim — not every
+claim in this project has Android-side CI coverage yet.
+
 ## Troubleshooting — real, reproduced issues and their fixes
 
 These were all hit and fixed getting the very first real build working on a real Windows machine
