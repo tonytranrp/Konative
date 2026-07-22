@@ -193,6 +193,23 @@ public:
                 "this specific target.");
         }
 
+        // Sibling to the SPSC check above, proving a DIFFERENT property: that one fully joins its
+        // producer thread before ever draining, so it never actually exercises post() and
+        // drain_into() running concurrently - found via a real code-review pass (2026-07-22) noting
+        // the first check's claimed coverage was broader than what it actually exercised.
+        bool spsc_concurrent_ok = konative::scheduling::run_spsc_event_queue_concurrent_self_check();
+        if (spsc_concurrent_ok) {
+            konative::core::log_info(
+                "KonativeAndroidApp: SPSC event queue CONCURRENT self-check PASSED on this "
+                "device/ABI - real overlapping post()/drain_into() confirmed lossless and in order.");
+        } else {
+            konative::core::log_error(
+                "KonativeAndroidApp: SPSC event queue CONCURRENT self-check FAILED on this "
+                "device/ABI - real overlapping post()/drain_into() lost events, delivered them out "
+                "of order, or timed out. Nothing else in this app currently depends on this, but "
+                "confirms a real problem on this specific target.");
+        }
+
         // EnTT snapshot + cereal - the "historically-documented snapshot-API pairing" the
         // dependency stack picked cereal for specifically, unused anywhere in this codebase until
         // now (confirmed by repo-wide grep before landing this). Same permanent
@@ -689,7 +706,8 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
             reinterpret_cast<void*>(&native_dispatch_key_event),
         },
     };
-    if (env->RegisterNatives(loaded.value().clazz.get(), native_methods, 10) != JNI_OK ||
+    if (env->RegisterNatives(loaded.value().clazz.get(), native_methods,
+                              sizeof(native_methods) / sizeof(native_methods[0])) != JNI_OK ||
         konative::jni::check_and_clear_exception(env, "RegisterNatives(nativeDispatchLifecycle/nativeTick/nativeGetTickCount/nativeDispatchTouch*/nativeGetTouchCount/nativeDispatchWindow*/nativeDispatchKeyEvent)")) {
         konative::core::log_error(
             "JNI_OnLoad: RegisterNatives(nativeDispatchLifecycle/nativeTick/nativeGetTickCount/"

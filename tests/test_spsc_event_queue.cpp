@@ -21,6 +21,10 @@ TEST_CASE("run_spsc_event_queue_self_check: a real single producer thread delive
     CHECK(konative::scheduling::run_spsc_event_queue_self_check());
 }
 
+TEST_CASE("run_spsc_event_queue_concurrent_self_check: post() and drain_into() running concurrently still deliver every event, losslessly AND in order") {
+    CHECK(konative::scheduling::run_spsc_event_queue_concurrent_self_check());
+}
+
 TEST_CASE("SpscEventQueue: post()+drain_into() from a single thread delivers every event, in order") {
     konative::scheduling::SpscEventQueue<CounterEvent> queue;
     queue.post(CounterEvent{1});
