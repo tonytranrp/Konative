@@ -15,6 +15,7 @@
 #include "konative/app/application.hpp"
 #include "konative/app/entry_point.hpp"
 #include "konative/core/log.hpp"
+#include "konative/ecs/glm_storage_self_check.hpp"
 #include "konative/ecs/registry_snapshot_self_check.hpp"
 #include "konative/embed/checked_blob.hpp"
 #include "konative/events/input/TouchDownEvent.hpp"
@@ -129,6 +130,22 @@ public:
                 "(nothing else in this app currently depends on Taskflow), but confirms "
                 "ARCHITECTURE.md section 9's flagged risk is real on this specific target - do not "
                 "build further architecture on Taskflow here without investigating first.");
+        }
+
+        // GLM's packed vec3 + EnTT's paged component storage - ARCHITECTURE.md section 4's own
+        // "default to packed types... until verified" recommendation, unresolved until now (GLM was
+        // fetched via CPM since the project's first dependency pass but never linked or included
+        // anywhere - confirmed by repo-wide grep before landing this).
+        bool glm_storage_ok = konative::ecs::run_glm_ecs_storage_self_check();
+        if (glm_storage_ok) {
+            konative::core::log_info(
+                "KonativeAndroidApp: GLM packed-vec3 + EnTT storage self-check PASSED on this "
+                "device/ABI - real round-trip through paged component storage confirmed correct.");
+        } else {
+            konative::core::log_error(
+                "KonativeAndroidApp: GLM packed-vec3 + EnTT storage self-check FAILED on this "
+                "device/ABI - nothing else in this app currently depends on this, but confirms a "
+                "real problem on this specific target.");
         }
 
         // BS::thread_pool (ThreadPool) - the OTHER scheduler this stack picked, alongside Taskflow,

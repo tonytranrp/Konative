@@ -9,7 +9,8 @@ target_sources(konative_ecs INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/system.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/world.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/registry_snapshot_self_check.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/glm_storage_self_check.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/detail/system_traits.hpp
 )
 
-target_link_libraries(konative_ecs INTERFACE konative::core konative::reflect konative::events EnTT::EnTT cereal::cereal)
+target_link_libraries(konative_ecs INTERFACE konative::core konative::reflect konative::events EnTT::EnTT cereal::cereal glm::glm)
