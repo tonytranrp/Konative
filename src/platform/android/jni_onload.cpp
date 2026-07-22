@@ -24,6 +24,7 @@
 #include "konative/events/window/WindowFocusChangedEvent.hpp"
 #include "konative/events/window/WindowResizedEvent.hpp"
 #include "konative/jni/dex_loader.hpp"
+#include "konative/reflect/meta_registry.hpp"
 #include "konative/scheduling/cross_thread_event_queue.hpp"
 #include "konative/scheduling/taskflow_self_check.hpp"
 
@@ -65,6 +66,13 @@ template <class Archive>
 void serialize(Archive& archive, HeartbeatCounter& counter) {
     archive(counter.ticks);
 }
+
+// Lets on_started() below reflect HeartbeatCounter with konative::reflect::reflect_component<T>() -
+// include/konative/reflect/ (entt::meta registration + emplace-by-id thunk) had real desktop test
+// coverage (tests/test_reflect.cpp) but, unlike everything else this session wired up, had never
+// been exercised against a real component in the real shipping app (confirmed by grep before
+// building this).
+constexpr entt::id_type kHeartbeatCounterReflectId = entt::hashed_string{"konative::HeartbeatCounter"};
 
 // Registered via `world().systems().add()` in `on_started()` below - `SystemSequence::run()` calls
 // every registered system, in registration order, once per real `World::tick()` call (itself driven
@@ -142,7 +150,42 @@ public:
         // cover: create real entities with a real component, register a real system the standard
         // way. on_tick() below reports the real, live result every kTickLogInterval frames.
         auto& registry = world().registry();
-        for (int i = 0; i < kHeartbeatEntityCount; ++i) {
+
+        // reflect_component<T>()'s registration context is process-global, not per-call - it may
+        // only run once per process (confirmed by test_reflect.cpp's own comment; a second call for
+        // the same type trips a real EnTT assertion). on_started() itself only ever fires once per
+        // process (KonativeEntryPoint.kt's onActivityCreated guards a second Activity from
+        // re-triggering it), so this is a safe, one-time registration, not a repeated one.
+        konative::reflect::reflect_component<HeartbeatCounter>(kHeartbeatCounterReflectId);
+
+        // Entity 0 is constructed through the REFLECTED path (entt::resolve() + the "emplace"
+        // thunk), the exact mechanism a generic, reflection-driven consumer (editor "add component"
+        // UI, deserialization) would use without ever naming HeartbeatCounter itself - proving
+        // reflect_component<T>()'s real output works against a real app component, not just
+        // test_reflect.cpp's own local Health type. Entities 1..N-1 use the normal direct
+        // registry.emplace<T>() call, same as before - reflection is an additional, generic
+        // construction path for tooling, not a replacement for everyday direct construction
+        // (reflect/README.md's own framing).
+        const entt::entity reflected_entity = registry.create();
+        auto emplace_type = entt::resolve(kHeartbeatCounterReflectId);
+        auto emplace_func = emplace_type ? emplace_type.func(entt::hashed_string{"emplace"}) : entt::meta_func{};
+        const bool reflected_emplace_ok =
+            static_cast<bool>(emplace_func) &&
+            static_cast<bool>(
+                emplace_func.invoke({}, entt::forward_as_meta(registry), reflected_entity)) &&
+            registry.all_of<HeartbeatCounter>(reflected_entity);
+        if (reflected_emplace_ok) {
+            konative::core::log_info(
+                "KonativeAndroidApp: HeartbeatCounter constructed via the REFLECTED emplace-by-id "
+                "path (entt::resolve + \"emplace\" thunk) for 1 entity - reflect_component<T>() "
+                "confirmed working against a real app component.");
+        } else {
+            konative::core::log_error(
+                "KonativeAndroidApp: reflected HeartbeatCounter construction FAILED - falling back "
+                "to direct emplace for this entity so the rest of the ECS proof below still holds.");
+            registry.emplace_or_replace<HeartbeatCounter>(reflected_entity);
+        }
+        for (int i = 1; i < kHeartbeatEntityCount; ++i) {
             registry.emplace<HeartbeatCounter>(registry.create());
         }
         world().systems().add(&increment_heartbeat_counters);
