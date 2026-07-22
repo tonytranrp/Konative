@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "konative/core/log.hpp"
+#include "konative/jni/ref.hpp"
 
 // JNI call helpers - ported from GameHub's libs/jni/include/gamehub/jni/call.hpp (real, working
 // code - see ARCHITECTURE.md section 6.6), adapted to be fully inline (Konative is header-only
@@ -101,12 +102,12 @@ R call_instance_method(JNIEnv* env, jobject obj, const char* name, const char* s
     if (obj == nullptr) {
         return detail::default_value<R>();
     }
-    jclass clazz = env->GetObjectClass(obj);
-    if (check_and_clear_exception(env, name) || clazz == nullptr) {
+    LocalRef<jclass> clazz(env, env->GetObjectClass(obj));
+    if (check_and_clear_exception(env, name) || !clazz) {
         return detail::default_value<R>();
     }
-    jmethodID method = env->GetMethodID(clazz, name, signature);
-    env->DeleteLocalRef(clazz);
+    jmethodID method = env->GetMethodID(clazz.get(), name, signature);
+    clazz.reset();
     if (check_and_clear_exception(env, name) || method == nullptr) {
         return detail::default_value<R>();
     }

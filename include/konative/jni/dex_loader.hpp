@@ -68,10 +68,10 @@ inline LocalRef<jobject> upgrade_to_resource_aware_loader(JNIEnv* env, jobject b
         return LocalRef<jobject>(env, env->NewLocalRef(bootstrap_loader));
     }
 
-    jclass loader_class = env->GetObjectClass(bootstrap_loader);
+    LocalRef<jclass> loader_class(env, env->GetObjectClass(bootstrap_loader));
     jmethodID load_class_method =
-        env->GetMethodID(loader_class, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
-    env->DeleteLocalRef(loader_class);
+        env->GetMethodID(loader_class.get(), "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+    loader_class.reset();
     LocalRef<jobject> provider_class(
         env, env->CallObjectMethod(bootstrap_loader, load_class_method, provider_name.get()));
     if (env->ExceptionCheck()) {

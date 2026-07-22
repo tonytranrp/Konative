@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdlib>
+
 #include "konative/core/log.hpp"
 
 // KONATIVE_ASSERT: a project-wide assert that always logs through konative::core::log (and
