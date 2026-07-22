@@ -404,8 +404,10 @@ real empty placeholder otherwise, so it keeps linking now that the automated pat
 sibling blob too — see `testapp/README.md`).
 Requires five machine-local toolchain paths (`KONATIVE_KOTLINC`, `KONATIVE_R8`,
 `KONATIVE_ANDROID_JAR`, `KONATIVE_AAPT2`, `KONATIVE_JAVAC`) plus `KONATIVE_KOTLIN_CLASSPATH_DIR`/
-`KONATIVE_AAPT2_AAR_DIR` (pre-resolved dependency-jar/AAR directories — real Maven resolution from
-CMake is still not solved, see below), set the same way `ANDROID_NDK_HOME` already is
+`KONATIVE_AAPT2_AAR_DIR` (pre-resolved dependency-jar/AAR directories — CMake itself has no
+Maven-aware dependency resolver, so these are produced by a separate real Gradle project,
+`tools/kotlin-classpath-resolver/`, not by this pipeline itself; see that folder's own README.md and
+`embedded_kotlin/README.md`'s 2026-07-22 update), set the same way `ANDROID_NDK_HOME` already is
 (`CMakeUserPresets.json`, machine-local, gitignored). **Auto-discovery landed** (2026-07-22,
 `KonativeEmbedKotlinDex.cmake`): any of the five left unset falls back to real discovery rather than
 a hard `FATAL_ERROR` — `KONATIVE_ANDROID_JAR`/`KONATIVE_AAPT2`/`KONATIVE_R8` scan `$ENV{ANDROID_HOME}`

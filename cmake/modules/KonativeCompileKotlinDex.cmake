@@ -23,9 +23,9 @@ file(REMOVE_RECURSE "${_dex_dir}")
 file(MAKE_DIRECTORY "${_dex_dir}")
 
 # Real dependency jars are gathered from KONATIVE_CLASSPATH_DIR at BUILD time (a plain directory
-# of pre-resolved .jar files, including kotlin-stdlib.jar - see embedded_kotlin/README.md for how
-# this directory is currently produced; a real Maven-resolution step is still open, see
-# ARCHITECTURE.md section 6.6/6.7) - not a hardcoded list, so re-running this build after the
+# of pre-resolved .jar files, including kotlin-stdlib.jar - produced by a real Gradle project,
+# tools/kotlin-classpath-resolver/, since CMake itself has no Maven-aware dependency resolver; see
+# that folder's own README.md) - not a hardcoded list, so re-running this build after the
 # directory's contents change picks up the new jars automatically.
 file(GLOB _classpath_jars "${KONATIVE_CLASSPATH_DIR}/*.jar")
 if(NOT _classpath_jars)

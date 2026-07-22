@@ -21,19 +21,19 @@
 #
 # CLASSPATH_DIR is a plain directory of pre-resolved .jar dependencies (Compose runtime/ui/
 # foundation, activity, lifecycle-runtime/viewmodel, savedstate, kotlinx-coroutines-android,
-# kotlin-stdlib - NOT android.jar, that's separate). Real Maven-dependency-resolution-from-CMake is
-# still an open problem (embedded_kotlin/README.md, ARCHITECTURE.md section 6.6/6.7) - until it
-# lands, this directory must be assembled by hand once per machine (the Gradle-as-pure-resolver
-# scratchpad pattern documented in embedded_kotlin/README.md is the known-working way to produce
-# it) and pointed at via KONATIVE_KOTLIN_CLASSPATH_DIR. This function does not attempt to hide that
-# gap behind a fake default - see the FATAL_ERROR below.
+# kotlin-stdlib - NOT android.jar, that's separate). CMake itself has no Maven-aware dependency
+# resolver, so this directory is produced by a real Gradle project instead:
+# tools/kotlin-classpath-resolver/ (see that folder's own README.md) resolves the exact AndroidX/
+# Compose/coroutines closure embedded_kotlin/ needs and exports it here via its
+# `resolveKonativeClasspath` task - run once per machine (or per CI job) and point
+# KONATIVE_KOTLIN_CLASSPATH_DIR at its `resolved-output/kotlin-classpath/` output. This function does
+# not attempt to hide that a separate resolution step is required behind a fake default - see the
+# FATAL_ERROR below.
 #
 # AAPT2_AAR_DIR is a plain directory of the real, UNMODIFIED .aar files (not just their extracted
 # classes.jar - CLASSPATH_DIR's jars carry no res/ content at all) for the same dependency set
-# CLASSPATH_DIR resolves. Real AARs are already cached locally as a side effect of whatever produced
-# CLASSPATH_DIR (Gradle's own artifact cache keeps the original AAR alongside the extracted jar it
-# hands to a runtime classpath resolution) - see embedded_kotlin/README.md's Status section for how
-# this directory is currently assembled and pointed at via KONATIVE_AAPT2_AAR_DIR.
+# CLASSPATH_DIR resolves. tools/kotlin-classpath-resolver/'s same `resolveKonativeClasspath` task
+# exports these too, into `resolved-output/aapt2-aars/` - point KONATIVE_AAPT2_AAR_DIR there.
 #
 # NOTE on what this fixes (see embedded_kotlin/README.md's Status section for the full writeup):
 # real, AAPT2-assigned values for every field embedded_kotlin/r_shim/ used to hand-shim (build-time/
@@ -83,10 +83,12 @@ function(konative_embed_kotlin_dex TARGET_NAME)
       "konative_embed_kotlin_dex(${TARGET_NAME}): CLASSPATH_DIR <dir> is required (or set "
       "KONATIVE_KOTLIN_CLASSPATH_DIR) - a directory of pre-resolved .jar dependencies (Compose "
       "runtime/ui/foundation, activity, lifecycle-runtime/viewmodel, savedstate, "
-      "kotlinx-coroutines-android, kotlin-stdlib). See embedded_kotlin/README.md for how this "
-      "directory is currently produced (Maven resolution from CMake is a real open problem, not "
-      "solved by this function) and CMakeUserPresets.json for the machine-local-override pattern "
-      "already used for ANDROID_NDK_HOME.")
+      "kotlinx-coroutines-android, kotlin-stdlib). Run tools/kotlin-classpath-resolver/'s "
+      "`./gradlew resolveKonativeClasspath` (see that folder's own README.md) to produce it, and "
+      "point this at its resolved-output/kotlin-classpath/ - CMake itself has no Maven-aware "
+      "dependency resolver, so this is a real, separate step, not solved by this function. See also "
+      "CMakeUserPresets.json for the machine-local-override pattern already used for "
+      "ANDROID_NDK_HOME.")
   endif()
   if(NOT ARG_AAPT2_AAR_DIR)
     set(ARG_AAPT2_AAR_DIR "${KONATIVE_AAPT2_AAR_DIR}")
@@ -97,9 +99,10 @@ function(konative_embed_kotlin_dex TARGET_NAME)
       "KONATIVE_AAPT2_AAR_DIR) - a directory of the real, unmodified .aar files (NOT just their "
       "extracted classes.jar - CLASSPATH_DIR's jars have no res/ content) for the same dependency "
       "set CLASSPATH_DIR resolves, used to link real AAPT2-assigned resource IDs replacing "
-      "embedded_kotlin/r_shim/'s hand-shimmed placeholders. See embedded_kotlin/README.md's Status "
-      "section for how this directory is currently produced and CMakeUserPresets.json for the "
-      "machine-local-override pattern.")
+      "embedded_kotlin/r_shim/'s hand-shimmed placeholders. tools/kotlin-classpath-resolver/'s same "
+      "`./gradlew resolveKonativeClasspath` task exports this too, into "
+      "resolved-output/aapt2-aars/ - see that folder's own README.md and CMakeUserPresets.json for "
+      "the machine-local-override pattern.")
   endif()
   if(NOT ARG_PG_CONF)
     message(FATAL_ERROR "konative_embed_kotlin_dex(${TARGET_NAME}): PG_CONF <path> is required - an r8 proguard-rules file, e.g. embedded_kotlin/r8-rules.pro")

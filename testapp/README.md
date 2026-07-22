@@ -79,9 +79,10 @@ Each can also be set via the matching env var (`KONATIVE_KOTLINC`, `KONATIVE_R8`
 `KONATIVE_AAPT2_AAR_DIR`) instead of a Gradle property. `KONATIVE_KOTLIN_CLASSPATH_DIR` must be a
 directory of pre-resolved dependency jars (Compose runtime/ui/foundation, activity,
 lifecycle-runtime/viewmodel, savedstate, kotlinx-coroutines-android — NOT kotlin-stdlib.jar, that's
-sourced automatically from the kotlinc distribution itself) — see `embedded_kotlin/README.md` for
-how this directory is currently produced; real Maven dependency resolution from CMake is still an
-open problem. `KONATIVE_AAPT2_AAR_DIR` must be a directory of the real, unmodified `.aar` files
+sourced automatically from the kotlinc distribution itself) — produced by the real Gradle project at
+`tools/kotlin-classpath-resolver/` (see that folder's own README.md and `embedded_kotlin/README.md`'s
+2026-07-22 update), since CMake itself has no Maven-aware dependency resolver.
+`KONATIVE_AAPT2_AAR_DIR` must be a directory of the real, unmodified `.aar` files
 (not just their extracted `classes.jar` — those carry no `res/` content) for that same dependency
 set, used to generate real AAPT2-linked resource classes (`embedded_kotlin/README.md`'s
 2026-07-18 update) — real AARs are already cached locally as a side effect of whatever produced

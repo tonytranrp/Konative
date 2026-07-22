@@ -324,6 +324,34 @@ recording about how this was verified, since both go a level deeper than usual:
   `java.io.IOException: Failed to load asset path ... from fd 65` — exactly the exception class
   `catch (e: Exception)` already handles, exactly as designed.
 
+## Update (2026-07-22) — "real Maven dependency resolution from CMake" gap closed by a real Gradle resolver
+
+**The open gap this README and `KonativeEmbedKotlinDex.cmake`'s own top comment used to describe —
+`KONATIVE_KOTLIN_CLASSPATH_DIR`/`KONATIVE_AAPT2_AAR_DIR` had to be assembled by hand, once per
+machine, with no automated recipe actually written down anywhere — is now closed**:
+`tools/kotlin-classpath-resolver/` (see that folder's own README.md) is a real, standalone Gradle
+project that resolves the exact same AndroidX/Compose/coroutines closure this module needs and
+exports it into both directories via one `./gradlew resolveKonativeClasspath` command. It has its own
+Gradle wrapper (pinned to the exact Gradle version it was built and verified against), so running it
+needs nothing beyond a real Android SDK — no system-wide Gradle install, no manual jar-by-jar assembly.
+
+Building it surfaced three real bugs along the way (AGP's classes-jar artifact transform silently
+stripping `META-INF/*.kotlin_module`; a duplicate-class resolution quirk needing content-hash dedup;
+a phantom empty-jar artifact for resource-only AARs) — full writeup in that folder's own README.md,
+not duplicated here.
+
+**Verified equivalent to the hand-assembled classpath it replaces**: a real
+`cmake --build` (kotlinc+aapt2+r8) succeeded end-to-end using this resolver's own output, and a real
+on-device install+launch on the connected LDPlayer emulator showed clean logcat, all self-checks
+passing, and correct touch-input handling — the same verification bar every other real fix in this
+README is held to.
+
+**Not yet wired as the default**: `KONATIVE_KOTLIN_CLASSPATH_DIR`/`KONATIVE_AAPT2_AAR_DIR` still point
+at the original hand-assembled directories on this dev machine until the resolver is wired into an
+actual CI job (tracked separately) — so a fresh checkout with no pre-existing hand-assembled classpath
+can still build without also needing this resolver run first. This update records that the manual-
+assembly gap is solved and reproducible, not that every consumer has switched to it yet.
+
 ## Adding to this folder
 
 New `@Composable` UI, new `ActivityLifecycleCallbacks` behavior, new state — all real Kotlin here,
