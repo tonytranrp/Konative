@@ -54,9 +54,20 @@ function(konative_add_kotlin_native_module name)
   set(KN_CINTEROP_ARGS "")
   if(ARG_CINTEROP_DEF)
     set(KN_KLIB "${KN_OUT_DIR}/${name}_cinterop.klib")
+    # A real 2026-07-22 deep review found this stub doubly broken as a CMake build step (not as a
+    # cinterop implementation, which was never the point here - see the message below): (1) `cmake
+    # -E echo` only prints text, never creates the file this command declares as its OUTPUT, so the
+    # build system considers this step perpetually out-of-date and re-runs it every single build;
+    # (2) the kotlinc-native compile step below had no DEPENDS edge on KN_KLIB at all, so nothing
+    # actually ordered it after this stub. Fixed both - `-E touch` gives it a real, cacheable output,
+    # and DEPENDS "${ARG_CINTEROP_DEF}" ties it to the real def file so it re-runs if that changes.
+    # Still just a stub: whoever wires up real cinterop generation (ARCHITECTURE.md section 6.3,
+    # research/research.md's Vulkan-cinterop next step) replaces the COMMAND below, not this fix.
     add_custom_command(
       OUTPUT "${KN_KLIB}"
       COMMAND "${CMAKE_COMMAND}" -E echo "Konative: cinterop for ${name} not yet wired - see KONATIVE_KOTLIN_NATIVE_TARGET / ARCHITECTURE.md section 6.3"
+      COMMAND "${CMAKE_COMMAND}" -E touch "${KN_KLIB}"
+      DEPENDS "${ARG_CINTEROP_DEF}"
       COMMENT "Konative: cinterop stub for ${name} (${ARG_CINTEROP_DEF})"
       VERBATIM)
     list(APPEND KN_CINTEROP_ARGS "-library" "${KN_KLIB}")
@@ -70,7 +81,7 @@ function(konative_add_kotlin_native_module name)
             ${KN_BUILD_TYPE_FLAG}
             ${KN_CINTEROP_ARGS}
             -o "${KN_OUT_DIR}/${name}"
-    DEPENDS ${KONATIVE_KN_SOURCES}
+    DEPENDS ${KONATIVE_KN_SOURCES} ${KN_KLIB}
     COMMENT "Konative: kotlinc-native compiling ${name} (${KONATIVE_KOTLIN_NATIVE_TARGET})"
     VERBATIM)
 

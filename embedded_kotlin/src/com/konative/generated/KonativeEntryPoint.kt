@@ -218,19 +218,39 @@ private object AndroidLifecycleEvent {
     const val DESTROYED = 3
 }
 
+// Backs logNativeBindingFailureOnce() below - a real 2026-07-22 deep review found every wrapper in
+// this file logged on EVERY occurrence with no throttling, and two of them (dispatchTickToNative/
+// queryTickCountFromNative) are called from FrameTicker.doFrame(), i.e. up to 60-120 times per
+// second for as long as the Activity stays resumed - a real signature mismatch after a future
+// refactor would silently degrade from "one clear error" into a logcat flood, itself risking masking
+// other diagnostics and adding real per-call I/O jank on doFrame()'s otherwise-lightweight hot path.
+private val loggedNativeBindingFailures = mutableSetOf<String>()
+
+// Logs a native-binding failure exactly once per distinct call site (keyed by `tag`, not by message
+// content, so a transient detail like an event/count value in the message doesn't defeat the
+// dedup) for the remaining life of the process - still guarantees the developer sees it at least
+// once, matching this codebase's "report clearly, don't silently swallow" standing rule
+// (embedded_kotlin/README.md, core/log.hpp's own doc comment), without flooding logcat on a hot path.
+// Not thread-safe (a plain MutableSet, no synchronization) - correct here because every real call
+// site below is only ever reached from the main/Choreographer/Compose thread (verified by tracing
+// each one's real producer during the same review), not because it's an oversight.
+private fun logNativeBindingFailureOnce(tag: String, message: String, throwable: Throwable) {
+    if (loggedNativeBindingFailures.add(tag)) {
+        Log.e("Konative", message, throwable)
+    }
+}
+
 // Wraps every real nativeDispatchLifecycle() call site: if RegisterNatives ever failed to bind this
 // method (jni_onload.cpp's own JNI_OnLoad logs why, non-fatally, if so), an uncaught
 // UnsatisfiedLinkError here would crash the Activity's own onResume()/onPause()/onDestroy() -
 // breaking real Compose rendering over a C++-side feature that's supposed to degrade gracefully.
-// Logs once per occurrence rather than silently swallowing it, matching this codebase's own
-// "the self-check should report clearly, not silently swallow a failure" standing rule
-// (embedded_kotlin/README.md, core/log.hpp's own doc comment).
 private fun dispatchToNative(event: Int) {
     try {
         KonativeEntryPoint.nativeDispatchLifecycle(event)
     } catch (e: UnsatisfiedLinkError) {
-        Log.e("Konative", "dispatchToNative: nativeDispatchLifecycle unavailable (event=$event) - " +
-            "the C++ ECS/events core will not see this transition; Compose is unaffected.", e)
+        logNativeBindingFailureOnce("dispatchToNative",
+            "dispatchToNative: nativeDispatchLifecycle unavailable (event=$event) - " +
+                "the C++ ECS/events core will not see this transition; Compose is unaffected.", e)
     }
 }
 
@@ -290,8 +310,9 @@ private fun dispatchTickToNative(deltaSeconds: Float) {
     try {
         KonativeEntryPoint.nativeTick(deltaSeconds)
     } catch (e: UnsatisfiedLinkError) {
-        Log.e("Konative", "dispatchTickToNative: nativeTick unavailable - the C++ ECS/systems side " +
-            "will not receive real per-frame ticks; Compose rendering is unaffected.", e)
+        logNativeBindingFailureOnce("dispatchTickToNative",
+            "dispatchTickToNative: nativeTick unavailable - the C++ ECS/systems side " +
+                "will not receive real per-frame ticks; Compose rendering is unaffected.", e)
     }
 }
 
@@ -302,8 +323,9 @@ private fun queryTickCountFromNative(): Long {
     return try {
         KonativeEntryPoint.nativeGetTickCount()
     } catch (e: UnsatisfiedLinkError) {
-        Log.e("Konative", "queryTickCountFromNative: nativeGetTickCount unavailable - the UI will " +
-            "not show a live tick count; Compose rendering is otherwise unaffected.", e)
+        logNativeBindingFailureOnce("queryTickCountFromNative",
+            "queryTickCountFromNative: nativeGetTickCount unavailable - the UI will " +
+                "not show a live tick count; Compose rendering is otherwise unaffected.", e)
         tickCountDisplay
     }
 }
@@ -314,24 +336,27 @@ private fun dispatchTouchDownToNative(pointerId: Int, x: Float, y: Float) {
     try {
         KonativeEntryPoint.nativeDispatchTouchDown(pointerId, x, y)
     } catch (e: UnsatisfiedLinkError) {
-        Log.e("Konative", "dispatchTouchDownToNative: nativeDispatchTouchDown unavailable - the " +
-            "C++ ECS/events core will not see this touch; Compose rendering is unaffected.", e)
+        logNativeBindingFailureOnce("dispatchTouchDownToNative",
+            "dispatchTouchDownToNative: nativeDispatchTouchDown unavailable - the " +
+                "C++ ECS/events core will not see this touch; Compose rendering is unaffected.", e)
     }
 }
 private fun dispatchTouchMoveToNative(pointerId: Int, x: Float, y: Float) {
     try {
         KonativeEntryPoint.nativeDispatchTouchMove(pointerId, x, y)
     } catch (e: UnsatisfiedLinkError) {
-        Log.e("Konative", "dispatchTouchMoveToNative: nativeDispatchTouchMove unavailable - the " +
-            "C++ ECS/events core will not see this touch; Compose rendering is unaffected.", e)
+        logNativeBindingFailureOnce("dispatchTouchMoveToNative",
+            "dispatchTouchMoveToNative: nativeDispatchTouchMove unavailable - the " +
+                "C++ ECS/events core will not see this touch; Compose rendering is unaffected.", e)
     }
 }
 private fun dispatchTouchUpToNative(pointerId: Int, x: Float, y: Float) {
     try {
         KonativeEntryPoint.nativeDispatchTouchUp(pointerId, x, y)
     } catch (e: UnsatisfiedLinkError) {
-        Log.e("Konative", "dispatchTouchUpToNative: nativeDispatchTouchUp unavailable - the C++ " +
-            "ECS/events core will not see this touch; Compose rendering is unaffected.", e)
+        logNativeBindingFailureOnce("dispatchTouchUpToNative",
+            "dispatchTouchUpToNative: nativeDispatchTouchUp unavailable - the C++ " +
+                "ECS/events core will not see this touch; Compose rendering is unaffected.", e)
     }
 }
 
@@ -340,8 +365,9 @@ private fun queryTouchCountFromNative(): Long {
     return try {
         KonativeEntryPoint.nativeGetTouchCount()
     } catch (e: UnsatisfiedLinkError) {
-        Log.e("Konative", "queryTouchCountFromNative: nativeGetTouchCount unavailable - the UI " +
-            "will not show a live touch count; Compose rendering is otherwise unaffected.", e)
+        logNativeBindingFailureOnce("queryTouchCountFromNative",
+            "queryTouchCountFromNative: nativeGetTouchCount unavailable - the UI " +
+                "will not show a live touch count; Compose rendering is otherwise unaffected.", e)
         touchCountDisplay
     }
 }
@@ -352,8 +378,9 @@ private fun dispatchWindowResizedToNative(width: Int, height: Int) {
     try {
         KonativeEntryPoint.nativeDispatchWindowResized(width, height)
     } catch (e: UnsatisfiedLinkError) {
-        Log.e("Konative", "dispatchWindowResizedToNative: nativeDispatchWindowResized unavailable " +
-            "- the C++ ECS/events core will not see this resize; Compose rendering is unaffected.", e)
+        logNativeBindingFailureOnce("dispatchWindowResizedToNative",
+            "dispatchWindowResizedToNative: nativeDispatchWindowResized unavailable " +
+                "- the C++ ECS/events core will not see this resize; Compose rendering is unaffected.", e)
     }
 }
 
@@ -363,9 +390,10 @@ private fun dispatchWindowFocusChangedToNative(hasFocus: Boolean) {
     try {
         KonativeEntryPoint.nativeDispatchWindowFocusChanged(hasFocus)
     } catch (e: UnsatisfiedLinkError) {
-        Log.e("Konative", "dispatchWindowFocusChangedToNative: nativeDispatchWindowFocusChanged " +
-            "unavailable - the C++ ECS/events core will not see this focus change; Compose " +
-            "rendering is unaffected.", e)
+        logNativeBindingFailureOnce("dispatchWindowFocusChangedToNative",
+            "dispatchWindowFocusChangedToNative: nativeDispatchWindowFocusChanged " +
+                "unavailable - the C++ ECS/events core will not see this focus change; Compose " +
+                "rendering is unaffected.", e)
     }
 }
 
@@ -374,8 +402,9 @@ private fun dispatchKeyEventToNative(keyCode: Int, isDown: Boolean) {
     try {
         KonativeEntryPoint.nativeDispatchKeyEvent(keyCode, isDown)
     } catch (e: UnsatisfiedLinkError) {
-        Log.e("Konative", "dispatchKeyEventToNative: nativeDispatchKeyEvent unavailable - the C++ " +
-            "ECS/events core will not see this key event; Compose rendering is unaffected.", e)
+        logNativeBindingFailureOnce("dispatchKeyEventToNative",
+            "dispatchKeyEventToNative: nativeDispatchKeyEvent unavailable - the C++ " +
+                "ECS/events core will not see this key event; Compose rendering is unaffected.", e)
     }
 }
 
