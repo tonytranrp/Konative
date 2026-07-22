@@ -70,7 +70,13 @@ function(konative_embed_binary_blob TARGET_NAME)
       "automatically here.")
   endif()
 
-  get_filename_component(ARG_BLOB "${ARG_BLOB}" ABSOLUTE)
+  # BASE_DIR pinned to the top-level project root, not left to default to
+  # CMAKE_CURRENT_SOURCE_DIR - the latter is whichever CMakeLists.txt happens to be calling this
+  # function (today, src/platform/android/), an internal implementation detail a user passing a
+  # relative -DKONATIVE_EMBEDDED_DEX_PATH=... override has no reason to know or expect (found by a
+  # 2026-07-22 code-review pass). An already-absolute ARG_BLOB (the normal, automated-pipeline case)
+  # is unaffected either way - ABSOLUTE is a no-op on a path that already is one.
+  get_filename_component(ARG_BLOB "${ARG_BLOB}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
   # Always forward-slash, even though we're on a Windows host generating for
   # an NDK target: GAS/LLVM's asm string lexer treats backslash as an escape
   # character, so a raw C:\Users\...\ path corrupts silently. See

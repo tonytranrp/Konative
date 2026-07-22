@@ -66,16 +66,19 @@ fun tryInstallGeneralResourcesLoader(activity: Activity, resourcesArscBuffer: By
         resourcesArscBuffer.get(bytes)
 
         val fd = Os.memfd_create("konative_resources", 0)
-        try {
+        // loader is hoisted out of the inner try so the self-check failure branch below can still
+        // reach it to undo addLoaders() - see that branch's own comment for why.
+        val loader = try {
             Os.write(fd, bytes, 0, bytes.size)
             // Rewind before handing off - Os.write() leaves the fd's own position at the end of
             // what was just written, and loadFromTable() reads from the fd's current position.
             Os.lseek(fd, 0, OsConstants.SEEK_SET)
             val pfd = ParcelFileDescriptor.dup(fd)
             val provider = ResourcesProvider.loadFromTable(pfd, object : AssetsProvider {})
-            val loader = ResourcesLoader()
-            loader.addProvider(provider)
-            activity.resources.addLoaders(loader)
+            val newLoader = ResourcesLoader()
+            newLoader.addProvider(provider)
+            activity.resources.addLoaders(newLoader)
+            newLoader
         } finally {
             // dup() above creates an independent fd inside the ParcelFileDescriptor - this
             // original memfd is no longer needed once that succeeds (or once we're bailing out via
@@ -96,11 +99,21 @@ fun tryInstallGeneralResourcesLoader(activity: Activity, resourcesArscBuffer: By
         // asserting a specific English string would incorrectly flag success as failure.
         val verifyTab = runCatching { activity.resources.getString(0x7f08001b) }
         if (verifyTab.isFailure) {
+            // Real cleanup, not just a failure report: addLoaders() above already durably mutated
+            // the real Activity Resources/AssetManager - callers (KonativeEntryPoint.kt) treat this
+            // function's return value as a clean either/or against KonativeResourceStringOverride's
+            // scoped patch, but without this, a table that loads successfully yet fails this
+            // specific field lookup (e.g. a future AAPT2 relink reassigning this id) would leave
+            // BOTH mechanisms layered on the same AssetManager instead of either/or - a real gap a
+            // 2026-07-22 code-review pass found was never actually exercised in testing (this
+            // file's own README note only ever forced an early return before addLoaders() ran, not
+            // this genuine post-mutation failure path).
+            activity.resources.removeLoaders(loader)
             Log.e(
                 "Konative",
                 "tryInstallGeneralResourcesLoader: addLoaders() succeeded but " +
                     "Resources.getString() still fails for a known field (${verifyTab.exceptionOrNull()}) " +
-                    "- falling back to the scoped string override instead.",
+                    "- removed the loader and falling back to the scoped string override instead.",
             )
             return false
         }

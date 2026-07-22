@@ -231,11 +231,14 @@ public:
         // way. on_tick() below reports the real, live result every kTickLogInterval frames.
         auto& registry = world().registry();
 
-        // reflect_component<T>()'s registration context is process-global, not per-call - it may
-        // only run once per process (confirmed by test_reflect.cpp's own comment; a second call for
-        // the same type trips a real EnTT assertion). on_started() itself only ever fires once per
+        // reflect_component<T>()'s registration context is process-global, not per-call. Re-running
+        // it for the SAME type/id is actually a safe no-op (entt::meta<T>() is deliberately
+        // idempotent - verified by reading meta_factory<T>::type()'s real source, 2026-07-22
+        // review); what it now guards against for real (a KONATIVE_ASSERT inside
+        // reflect_component<T>() itself, release-mode-safe unlike EnTT's own internal assertion) is
+        // TWO DIFFERENT types colliding on the same id. on_started() itself only ever fires once per
         // process (KonativeEntryPoint.kt's onActivityCreated guards a second Activity from
-        // re-triggering it), so this is a safe, one-time registration, not a repeated one.
+        // re-triggering it), so this call site specifically is a safe, one-time registration either way.
         konative::reflect::reflect_component<HeartbeatCounter>(kHeartbeatCounterReflectId);
 
         // Entity 0 is constructed through the REFLECTED path (entt::resolve() + the "emplace"
