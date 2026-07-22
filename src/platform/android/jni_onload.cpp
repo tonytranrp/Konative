@@ -5,8 +5,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <sstream>
 #include <span>
+#include <thread>
 
+#include <cereal/archives/binary.hpp>
 #include <jni.h>
 
 #include "konative/app/application.hpp"
@@ -17,9 +20,11 @@
 #include "konative/events/input/TouchDownEvent.hpp"
 #include "konative/events/input/TouchMoveEvent.hpp"
 #include "konative/events/input/TouchUpEvent.hpp"
+#include "konative/events/persistence/SnapshotSavedEvent.hpp"
 #include "konative/events/window/WindowFocusChangedEvent.hpp"
 #include "konative/events/window/WindowResizedEvent.hpp"
 #include "konative/jni/dex_loader.hpp"
+#include "konative/scheduling/cross_thread_event_queue.hpp"
 #include "konative/scheduling/taskflow_self_check.hpp"
 
 extern "C" {
@@ -51,6 +56,15 @@ constexpr const char* kEntryPointClass = "com.konative.generated.KonativeEntryPo
 struct HeartbeatCounter {
     std::uint64_t ticks = 0;
 };
+
+// cereal finds serialize() via ADL, so it lives in HeartbeatCounter's own (anonymous) namespace -
+// same requirement konative::ecs::detail::SnapshotSelfCheckComponent's own serialize() documents.
+// Lets the real periodic snapshot below (KonativeAndroidApp::on_tick()) reuse entt::snapshot for a
+// real component, not just the self-check's private test-only type.
+template <class Archive>
+void serialize(Archive& archive, HeartbeatCounter& counter) {
+    archive(counter.ticks);
+}
 
 // Registered via `world().systems().add()` in `on_started()` below - `SystemSequence::run()` calls
 // every registered system, in registration order, once per real `World::tick()` call (itself driven
@@ -157,6 +171,11 @@ public:
         // KonativeRootComposable's Modifier.onSizeChanged + LocalWindowInfo.current.isWindowFocused.
         world().events().sink<konative::events::window::WindowResizedEvent>().connect<&KonativeAndroidApp::on_window_resized>(*this);
         world().events().sink<konative::events::window::WindowFocusChangedEvent>().connect<&KonativeAndroidApp::on_window_focus_changed>(*this);
+
+        // CrossThreadEventQueue's first real production use in this app (previously only exercised
+        // by its own desktop stress test) - see on_tick()'s periodic snapshot below for the real
+        // producer thread. Same sink-connection mechanism as every other event consumer here.
+        world().events().sink<konative::events::persistence::SnapshotSavedEvent>().connect<&KonativeAndroidApp::on_snapshot_saved>(*this);
     }
     void on_resumed() override { konative::core::log_info("KonativeAndroidApp: on_resumed"); }
     void on_paused() override { konative::core::log_info("KonativeAndroidApp: on_paused"); }
@@ -188,6 +207,36 @@ public:
                 "real ECS proof: {} entities, {} combined HeartbeatCounter ticks",
                 tick_count_, delta_seconds, entity_count, total_heartbeat_ticks);
         }
+
+        // CrossThreadEventQueue's real production use: every kSnapshotIntervalTicks, snapshot the
+        // registry's HeartbeatCounters SYNCHRONOUSLY, right here on the main thread - entt::snapshot
+        // reads live storage directly, so capturing it on any OTHER thread while this same thread
+        // might concurrently mutate it (via increment_heartbeat_counters, run earlier this exact
+        // frame by world_.tick()) would be a real data race. The captured bytes are then handed by
+        // VALUE to a detached background thread, which only ever touches its own immutable copy -
+        // no shared mutable state, no race - and posts a real SnapshotSavedEvent back across the
+        // lock-free boundary once done. Detached, not joined: this is a small, bounded, fire-and-
+        // forget job: Taskflow (already proven working, see the self-check above) would be the
+        // right tool for something recurring/coordinated, but constructing a whole tf::Executor for
+        // one periodic single-shot job would be more machinery than this needs.
+        if (tick_count_ % kSnapshotIntervalTicks == 0) {
+            std::ostringstream buffer;
+            {
+                cereal::BinaryOutputArchive archive(buffer);
+                entt::snapshot{world().registry()}
+                    .get<entt::entity>(archive)
+                    .get<HeartbeatCounter>(archive);
+            }
+            std::thread([bytes = buffer.str(), queue = &snapshot_queue_] {
+                queue->post(konative::events::persistence::SnapshotSavedEvent{bytes.size()});
+            }).detach();
+        }
+        // Drains whatever the background thread(s) above have posted so far. World::tick() already
+        // ran Dispatcher::update() for this exact frame before on_tick() was called (see
+        // Application::tick()), so anything drained here is enqueued but not flushed to
+        // on_snapshot_saved() until NEXT frame - harmless one-frame latency for an inherently async
+        // notification, see cross_thread_event_queue.hpp's own comment for the full reasoning.
+        snapshot_queue_.drain_into(world().events());
     }
 
     // Read from the SAME thread that writes it (both on_tick() and the Kotlin-side query below run
@@ -234,10 +283,22 @@ private:
                                   event.has_focus);
     }
 
+    // Delivered one frame after the background thread in on_tick() posts it (see that function's
+    // own comment on why) - real proof the whole cross-thread pipeline (main-thread synchronous
+    // snapshot -> background-thread handoff -> CrossThreadEventQueue -> drain_into() ->
+    // Dispatcher::update() -> this sink) genuinely works, not just each piece in isolation.
+    void on_snapshot_saved(const konative::events::persistence::SnapshotSavedEvent& event) {
+        konative::core::log_info(
+            "KonativeAndroidApp: SnapshotSavedEvent - a background thread serialized {} bytes of "
+            "real ECS state and reported back via CrossThreadEventQueue.", event.byte_size);
+    }
+
     static constexpr std::uint64_t kTickLogInterval = 120; // ~1-2s of real frames on typical hardware
+    static constexpr std::uint64_t kSnapshotIntervalTicks = 300; // ~5s of real frames on typical hardware
     static constexpr int kHeartbeatEntityCount = 3;
     std::uint64_t tick_count_ = 0;
     std::uint64_t touch_event_count_ = 0;
+    konative::scheduling::CrossThreadEventQueue<konative::events::persistence::SnapshotSavedEvent> snapshot_queue_;
 };
 
 // Function-local static, same singleton-via-static pattern examples/minimal_triangle/main.cpp's

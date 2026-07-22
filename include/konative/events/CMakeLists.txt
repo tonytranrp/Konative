@@ -26,6 +26,7 @@ target_sources(konative_events INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/input/TouchMoveEvent.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/input/TouchUpEvent.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/input/KeyEvent.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/persistence/SnapshotSavedEvent.hpp
 )
 
 target_link_libraries(konative_events INTERFACE konative::core EnTT::EnTT)
