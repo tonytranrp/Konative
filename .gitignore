@@ -48,6 +48,13 @@ testapp/gradle/wrapper/gradle-wrapper.jar
 testapp/gradlew
 testapp/gradlew.bat
 
+# Gradle (tools/kotlin-classpath-resolver/) - same shape as testapp/'s own Gradle exclusions above;
+# the resolved output directories themselves (a machine-local cache of downloaded jars/AARs) are
+# also never committed - see that project's own README for why.
+tools/kotlin-classpath-resolver/.gradle/
+tools/kotlin-classpath-resolver/local.properties
+tools/kotlin-classpath-resolver/resolved-output/
+
 # CMake's own convention: machine-local preset overrides (real NDK/SDK/kotlinc paths for
 # whoever's actual dev machine this is) never get committed - see CMakeUserPresets.json itself.
 CMakeUserPresets.json
