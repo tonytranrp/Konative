@@ -16,6 +16,13 @@ jobs:
   desktop-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # CPM.cmake's own real caching mechanism (cmake/CPM.cmake, CPM_SOURCE_CACHE) - the idiomatic
+      # way to skip re-cloning ~11 dependencies (EnTT, GLM, Taskflow, BS::thread_pool,
+      # concurrentqueue, readerwriterqueue, libcoro, cereal, doctest, PicoSHA2, glaze) on every run,
+      # rather than hand-caching build/desktop-debug/_deps directly (tied to FetchContent's own
+      # internal structure, less portable across cache restores).
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
     steps:
       - uses: actions/checkout@v4
 
@@ -24,6 +31,16 @@ jobs:
         with:
           cmakeVersion: "~3.28.0"
           ninjaVersion: "^1.11.0"
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          # Keyed on the exact dependency pins, not just their existence - a version bump or a new
+          # dependency correctly invalidates the cache instead of silently reusing stale sources.
+          key: cpm-cache-${{ runner.os }}-${{ hashFiles('cmake/modules/KonativeDependencies.cmake') }}
+          restore-keys: |
+            cpm-cache-${{ runner.os }}-
 
       - name: Configure (desktop-debug preset)
         run: cmake --preset desktop-debug
