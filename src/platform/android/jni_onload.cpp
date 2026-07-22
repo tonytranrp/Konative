@@ -26,6 +26,7 @@
 #include "konative/events/window/WindowFocusChangedEvent.hpp"
 #include "konative/events/window/WindowResizedEvent.hpp"
 #include "konative/jni/dex_loader.hpp"
+#include "konative/reflect/meta_glaze_json_self_check.hpp"
 #include "konative/reflect/meta_registry.hpp"
 #include "konative/reflect/pfr_auto_registration_self_check.hpp"
 #include "konative/scheduling/cross_thread_event_queue.hpp"
@@ -241,6 +242,21 @@ public:
                 "KonativeAndroidApp: Boost.PFR + entt::meta auto-registration self-check FAILED on "
                 "this device/ABI. Nothing else in this app currently depends on this, but confirms "
                 "a real problem on this specific target.");
+        }
+
+        // entt::meta + Glaze reflection-driven JSON - ARCHITECTURE.md section 9's other
+        // explicitly-flagged "genuinely unproven" pairing, sibling to the Boost.PFR one above.
+        // Same permanent regression-guard-at-real-startup pattern as every other self-check here.
+        bool meta_glaze_json_ok = konative::reflect::run_meta_glaze_json_self_check();
+        if (meta_glaze_json_ok) {
+            konative::core::log_info(
+                "KonativeAndroidApp: entt::meta + Glaze JSON self-check PASSED on this device/ABI - "
+                "real reflection-driven serialization round-trip confirmed correct.");
+        } else {
+            konative::core::log_error(
+                "KonativeAndroidApp: entt::meta + Glaze JSON self-check FAILED on this device/ABI. "
+                "Nothing else in this app currently depends on this, but confirms a real problem on "
+                "this specific target.");
         }
 
         // Real ECS proof, the one piece Dispatcher/events + the tick driver + Taskflow above didn't

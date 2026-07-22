@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -59,13 +60,26 @@ entt::id_type pfr_field_id() {
     return entt::hashed_string{name.data(), name.size()};
 }
 
+// The SAME real, PFR-derived name, stored as a real entt::meta PROPERTY on the data member
+// (kFieldNamePropId below) rather than only used to compute the hashed id above -
+// entt::hashed_string is a genuine one-way hash (FNV1a), so without this, nothing could ever
+// recover "a" from field_a's own registered id at runtime. This is what lets
+// meta_component_to_json() (glaze_json.hpp) build real, human-readable JSON keys purely from
+// entt::meta's own registration data, without the caller (or PFR) being involved at
+// serialization time at all.
+inline constexpr entt::id_type kFieldNamePropId = entt::hashed_string{"konative::reflect::field_name"};
+
 template <typename T, std::size_t... Is>
 void reflect_fields_auto_impl(entt::meta_factory<T> factory, std::index_sequence<Is...>) {
-    // Comma-fold: each .data<>() call's return value is discarded (every call already returns
-    // *this, the same factory - see the .type()/.func() chain below), the fold just forces all
-    // of them to run, in field-declaration order, as a side effect against entt::meta's real,
-    // process-global registration context.
-    (factory.template data<&pfr_set_field<T, Is>, &pfr_get_field<T, Is>>(pfr_field_id<T, Is>()), ...);
+    // Comma-fold: each .data<>().prop<>() pair's return value is discarded (every call already
+    // returns *this, the same factory - see the .type()/.func() chain below), the fold just
+    // forces all of them to run, in field-declaration order, as a side effect against
+    // entt::meta's real, process-global registration context. prop() attaches to "the last meta
+    // object created" (EnTT's own factory.hpp doc comment) - chaining it directly after data<>()
+    // for the SAME field is what makes that binding correct, not incidental ordering.
+    (factory.template data<&pfr_set_field<T, Is>, &pfr_get_field<T, Is>>(pfr_field_id<T, Is>())
+         .prop(kFieldNamePropId, std::string(boost::pfr::get_name<Is, T>())),
+     ...);
 }
 
 } // namespace konative::reflect::detail
