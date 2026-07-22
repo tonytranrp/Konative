@@ -62,8 +62,24 @@ fun tryInstallGeneralResourcesLoader(activity: Activity, resourcesArscBuffer: By
     }
 
     return try {
-        val bytes = ByteArray(resourcesArscBuffer.remaining())
-        resourcesArscBuffer.get(bytes)
+        // duplicate(), not the shared resourcesArscBuffer directly - the buffer is captured ONCE in
+        // install()'s ActivityLifecycleCallbacks closure and reused across EVERY onActivityCreated()
+        // call for the life of the process, including a real device rotation's Activity recreation
+        // (jni_activity_bootstrap_research territory: install() itself only ever runs once, but this
+        // function runs once per real Activity instance). Reading directly via .get(bytes) mutates
+        // the buffer's OWN position, permanently draining it after the first call - every subsequent
+        // call then sees remaining()==0, allocates a zero-length array, writes zero bytes to the
+        // memfd, and predictably hits the exact "genuinely empty table" IOException this file's own
+        // README already documented and empirically tested for a DIFFERENT reason (verifying the
+        // fallback's safety net) - found by a real on-device diagnostic (2026-07-22): install 1
+        // showed remaining=145516 (the real, full resources.arsc size), every install after the
+        // first showed remaining=0, position already at the limit. duplicate() shares the same
+        // underlying byte storage but gets its own independent position/limit/mark, so reading it
+        // here never mutates the original captured buffer - every real Activity instance, including
+        // one recreated after rotation, sees the same full, correct bytes.
+        val buffer = resourcesArscBuffer.duplicate()
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
 
         val fd = Os.memfd_create("konative_resources", 0)
         // loader is hoisted out of the inner try so the self-check failure branch below can still
