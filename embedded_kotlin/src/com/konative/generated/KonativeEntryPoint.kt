@@ -7,10 +7,15 @@ import android.os.Bundle
 import android.util.Log
 import android.view.Choreographer
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -105,7 +110,20 @@ object KonativeEntryPoint {
     // for the C++ ECS/systems side, driven by FrameTicker below.
     @JvmStatic
     external fun nativeTick(deltaSeconds: Float)
+
+    // Same RegisterNatives contract, bound to native_get_tick_count - a read-only query (not
+    // another event) letting real, rendered Compose UI display real C++-side state for the first
+    // time. See KonativeRootComposable's own use of tickCountDisplay below.
+    @JvmStatic
+    external fun nativeGetTickCount(): Long
 }
+
+// Backs KonativeRootComposable's live tick-count display - a plain, object-scoped
+// androidx.compose.runtime.State, not one created via remember{} inside a composable, since it's
+// written from FrameTicker (real code, not composition) and just needs to be READ inside a
+// composable to correctly trigger recomposition on change; Compose doesn't require State objects
+// driving a composable to themselves be remember{}-scoped.
+private var tickCountDisplay by mutableStateOf(0L)
 
 // Mirrors jni_onload.cpp's own AndroidLifecycleEvent enum exactly - both sides must stay in sync.
 private object AndroidLifecycleEvent {
@@ -165,6 +183,11 @@ private object FrameTicker : Choreographer.FrameCallback {
         }
         lastFrameTimeNanos = frameTimeNanos
         dispatchTickToNative(deltaSeconds)
+        // Updated every real frame, not throttled the way jni_onload.cpp's own logcat summary is -
+        // a log line has real per-call I/O cost worth batching; recomposing one small BasicText at
+        // real display refresh rate is the normal, lightweight case Compose is built for, and doing
+        // it every frame is what makes this genuinely "live" rather than merely periodic.
+        tickCountDisplay = queryTickCountFromNative()
         Choreographer.getInstance().postFrameCallback(this)
     }
 }
@@ -177,6 +200,19 @@ private fun dispatchTickToNative(deltaSeconds: Float) {
     } catch (e: UnsatisfiedLinkError) {
         Log.e("Konative", "dispatchTickToNative: nativeTick unavailable - the C++ ECS/systems side " +
             "will not receive real per-frame ticks; Compose rendering is unaffected.", e)
+    }
+}
+
+// Same try/catch-wrapped shape, for the same reason - a missing native binding degrades to the UI
+// simply not advancing its tick display (stuck at its last real value, or 0 if it never got one),
+// rather than crashing the per-frame callback loop.
+private fun queryTickCountFromNative(): Long {
+    return try {
+        KonativeEntryPoint.nativeGetTickCount()
+    } catch (e: UnsatisfiedLinkError) {
+        Log.e("Konative", "queryTickCountFromNative: nativeGetTickCount unavailable - the UI will " +
+            "not show a live tick count; Compose rendering is otherwise unaffected.", e)
+        tickCountDisplay
     }
 }
 
@@ -221,15 +257,29 @@ private class ComposeHostOwner : LifecycleOwner, ViewModelStoreOwner, SavedState
 // BasicText, not material3's Text/MaterialTheme - a full Material3 design system (dynamic color,
 // ripple, typography scale) is a lot of embedded-blob weight this trivial proof doesn't need; see
 // embedded_kotlin/README.md for the measured size cost of adding it back.
+//
+// The second line (tickCountDisplay) is the one real addition beyond "prove Compose renders":
+// reading a androidx.compose.runtime.State's .value (via the `by` delegate here) inside a
+// composable automatically subscribes it to recomposition on change, so this line updates live,
+// every real frame, driven by real C++-side state (KonativeAndroidApp::tick_count_ in
+// jni_onload.cpp) - not just static text. Closes the loop from "the C++ ECS/systems core ticks,
+// but only logcat ever sees it" to something actually visible on screen, still using only the
+// same trivial foundation-only Compose surface as the line above it.
 @Composable
 private fun KonativeRootComposable() {
     Box(
         modifier = Modifier.fillMaxSize().background(Color(0xFF1B5E20)),
         contentAlignment = Alignment.Center,
     ) {
-        BasicText(
-            text = "Konative",
-            style = TextStyle(color = Color.White, fontSize = 24.sp),
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            BasicText(
+                text = "Konative",
+                style = TextStyle(color = Color.White, fontSize = 24.sp),
+            )
+            BasicText(
+                text = "C++ ticks: $tickCountDisplay",
+                style = TextStyle(color = Color.White, fontSize = 14.sp),
+            )
+        }
     }
 }

@@ -101,6 +101,12 @@ public:
         }
     }
 
+    // Read from the SAME thread that writes it (both on_tick() and the Kotlin-side query below run
+    // on the real Activity's main/UI thread - Choreographer callbacks and native-method calls from
+    // Kotlin's own main thread are both synchronous on that one thread) - a plain, non-atomic read
+    // is genuinely safe here, not just convenient; no cross-thread synchronization needed.
+    [[nodiscard]] std::uint64_t tick_count() const { return tick_count_; }
+
 private:
     static constexpr std::uint64_t kTickLogInterval = 120; // ~1-2s of real frames on typical hardware
     std::uint64_t tick_count_ = 0;
@@ -109,8 +115,11 @@ private:
 // Function-local static, same singleton-via-static pattern examples/minimal_triangle/main.cpp's
 // own create_application() already uses - constructed lazily on first call (JNI_OnLoad's own
 // RegisterNatives below never calls this directly; the first real call happens later, whenever the
-// embedded dex's first real Activity lifecycle event actually fires).
-konative::app::Application& android_app() {
+// embedded dex's first real Activity lifecycle event actually fires). Returns the concrete type,
+// not just konative::app::Application&, so native_get_tick_count() below can reach tick_count() -
+// create_application() (entry_point.hpp's real public contract) still returns the base reference,
+// unaffected.
+KonativeAndroidApp& android_app() {
     static KonativeAndroidApp instance;
     return instance;
 }
@@ -160,6 +169,14 @@ void JNICALL native_dispatch_lifecycle_event(JNIEnv*, jclass, jint event) {
 // why this only runs while the Activity is genuinely resumed.
 void JNICALL native_dispatch_tick(JNIEnv*, jclass, jfloat delta_seconds) {
     android_app().tick(delta_seconds);
+}
+
+// Bound to KonativeEntryPoint.nativeGetTickCount() - lets real, rendered Compose UI display real
+// C++-side state for the first time, closing the loop from "the C++ ECS/systems side ticks, but
+// only logcat ever sees it" to something actually visible on screen. Read-only, deliberately: this
+// is a query, not another event - it doesn't go through events::Dispatcher at all.
+jlong JNICALL native_get_tick_count(JNIEnv*, jclass) {
+    return static_cast<jlong>(android_app().tick_count());
 }
 
 } // namespace
@@ -232,15 +249,16 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
         }
     }
 
-    // Step 5.6: bind Kotlin's nativeDispatchLifecycle(Int)/nativeTick(Float) to the two functions
-    // above - see KonativeAndroidApp's own comment for why. Deliberately non-fatal on failure, same
-    // as the resources.arsc blob above: this wires a real feature (the C++ ECS/events core actually
-    // running), but its absence doesn't prevent Compose from rendering - only degrades to the C++
-    // side never seeing lifecycle transitions or ticks. Must happen before install() below even
-    // though the very first real call can't arrive until later (an Activity lifecycle event firing,
-    // or Choreographer's first posted frame, are both asynchronous, driven by the real Android
-    // framework afterward) - registering natives before handoff is simply the cleaner ordering, with
-    // no dependency on exactly when Kotlin's first callback fires.
+    // Step 5.6: bind Kotlin's nativeDispatchLifecycle(Int)/nativeTick(Float)/nativeGetTickCount()
+    // to the three functions above - see KonativeAndroidApp's own comment for why. Deliberately
+    // non-fatal on failure, same as the resources.arsc blob above: this wires a real feature (the
+    // C++ ECS/events core actually running, and its state actually visible in the rendered UI), but
+    // its absence doesn't prevent Compose from rendering - only degrades to the C++ side never
+    // seeing lifecycle transitions/ticks, and the UI never showing a live tick count. Must happen
+    // before install() below even though the very first real call can't arrive until later (an
+    // Activity lifecycle event firing, or Choreographer's first posted frame, are both asynchronous,
+    // driven by the real Android framework afterward) - registering natives before handoff is simply
+    // the cleaner ordering, with no dependency on exactly when Kotlin's first callback fires.
     JNINativeMethod native_methods[] = {
         {
             const_cast<char*>("nativeDispatchLifecycle"),
@@ -252,15 +270,21 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
             const_cast<char*>("(F)V"),
             reinterpret_cast<void*>(&native_dispatch_tick),
         },
+        {
+            const_cast<char*>("nativeGetTickCount"),
+            const_cast<char*>("()J"),
+            reinterpret_cast<void*>(&native_get_tick_count),
+        },
     };
-    if (env->RegisterNatives(loaded.value().clazz.get(), native_methods, 2) != JNI_OK ||
-        konative::jni::check_and_clear_exception(env, "RegisterNatives(nativeDispatchLifecycle/nativeTick)")) {
+    if (env->RegisterNatives(loaded.value().clazz.get(), native_methods, 3) != JNI_OK ||
+        konative::jni::check_and_clear_exception(env, "RegisterNatives(nativeDispatchLifecycle/nativeTick/nativeGetTickCount)")) {
         konative::core::log_error(
-            "JNI_OnLoad: RegisterNatives(nativeDispatchLifecycle/nativeTick) failed - the C++ "
-            "ECS/events core will not receive real Activity lifecycle transitions or ticks this "
-            "run. Compose rendering is unaffected (these native methods are unrelated to install()'s "
-            "own handoff below); Kotlin's own call sites are individually try/caught for exactly "
-            "this case, see KonativeEntryPoint.kt.");
+            "JNI_OnLoad: RegisterNatives(nativeDispatchLifecycle/nativeTick/nativeGetTickCount) "
+            "failed - the C++ ECS/events core will not receive real Activity lifecycle transitions "
+            "or ticks this run, and the UI will not show a live tick count. Compose rendering is "
+            "otherwise unaffected (these native methods are unrelated to install()'s own handoff "
+            "below); Kotlin's own call sites are individually try/caught for exactly this case, see "
+            "KonativeEntryPoint.kt.");
     }
 
     // Step 6: ONE handoff call, then native code is done - everything past this point (Compose
