@@ -1,0 +1,113 @@
+name: Android build
+
+# Closes the gap desktop-tests.yml's own top comment used to describe: "the Android presets ...
+# depend on machine-local paths in the gitignored CMakeUserPresets.json and are out of scope for a
+# hosted runner without real, separate setup work." This workflow IS that setup work - it builds the
+# real konative_app_native .so via the exact kotlinc+aapt2+r8+CMake+NDK pipeline ARCHITECTURE.md
+# section 6.6/6.7 documents, real Android SDK/NDK/kotlinc downloaded fresh each run (not assumed
+# pre-installed on the runner image), and tools/kotlin-classpath-resolver/ (see that folder's own
+# README.md) resolving the AndroidX/Compose/coroutines classpath instead of a hand-assembled,
+# machine-local one. Build-only, matching Task scope: no emulator/instrumented-test step here (a
+# real, separate, larger addition if ever wanted - reactivecircus/android-emulator-runner or similar).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  android-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [android-arm64, android-x86_64]
+    env:
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+      # Pinned to the exact version embedded_kotlin/README.md's own hard-won bug-fix history was
+      # found and fixed against (confirmed identical to this machine's own local kotlinc via
+      # kotlinc/build.txt: "2.4.0-release-281") - not the latest available, deliberately, same
+      # reasoning as tools/kotlin-classpath-resolver/build.gradle.kts's own dependency-version pins.
+      KOTLIN_VERSION: "2.4.0"
+      # Same NDK "r28" family as this project's own proven-working CMakeUserPresets.json entries
+      # (android-ndk-r28, machine-local/gitignored) - a specific version, not "whatever's on the
+      # runner today", so this build stays reproducible as the runner image evolves.
+      NDK_VERSION: "28.2.13676358"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install a pinned, modern CMake + Ninja
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "~3.28.0"
+          ninjaVersion: "^1.11.0"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK (platform 36, build-tools 36.0.0)
+        uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools platforms;android-36 build-tools;36.0.0"
+
+      - name: Set up Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+
+      - name: Point ANDROID_NDK_HOME at the installed NDK
+        # CMakePresets.json's android-arm64/android-x86_64 presets read this as a real environment
+        # variable via CMake's own $env{} preset macro (matching CMakeUserPresets.json's local
+        # "environment" block) - NOT a -D cache variable, so it must land in GITHUB_ENV, not the
+        # configure step's command line.
+        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+
+      - name: Download and verify the real kotlinc distribution (bundles the Compose compiler plugin)
+        # KonativeEmbedKotlinDex.cmake derives KONATIVE_COMPOSE_PLUGIN/KONATIVE_KOTLIN_STDLIB_JAR
+        # from KONATIVE_KOTLINC's own directory (<bin-dir>/../lib/*.jar) with a real existence
+        # check + FATAL_ERROR if missing - only KONATIVE_KOTLINC itself needs setting here.
+        run: |
+          curl -fsSL -o kotlin-compiler.zip "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
+          curl -fsSL -o kotlin-compiler.zip.sha256 "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip.sha256"
+          echo "$(cat kotlin-compiler.zip.sha256)  kotlin-compiler.zip" | sha256sum -c -
+          unzip -q kotlin-compiler.zip
+          echo "KONATIVE_KOTLINC=$PWD/kotlinc/bin/kotlinc" >> "$GITHUB_ENV"
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: cpm-cache-${{ runner.os }}-${{ hashFiles('cmake/modules/KonativeDependencies.cmake') }}
+          restore-keys: |
+            cpm-cache-${{ runner.os }}-
+
+      - name: Set up Gradle (wrapper/dependency caching for the resolver below)
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Resolve the Kotlin/AndroidX classpath (tools/kotlin-classpath-resolver/)
+        working-directory: tools/kotlin-classpath-resolver
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          ./gradlew resolveKonativeClasspath --no-daemon
+
+      - name: Configure (${{ matrix.preset }})
+        run: |
+          cmake --preset ${{ matrix.preset }} \
+            -DKONATIVE_KOTLINC="$KONATIVE_KOTLINC" \
+            -DKONATIVE_KOTLIN_CLASSPATH_DIR="$GITHUB_WORKSPACE/tools/kotlin-classpath-resolver/resolved-output/kotlin-classpath" \
+            -DKONATIVE_AAPT2_AAR_DIR="$GITHUB_WORKSPACE/tools/kotlin-classpath-resolver/resolved-output/aapt2-aars"
+
+      - name: Build konative_app_native
+        run: cmake --build build/${{ matrix.preset }} --target konative_app_native
+
+      - name: Verify the real .so was produced
+        run: |
+          SO_PATH="build/${{ matrix.preset }}/src/platform/android/libkonative_app_native.so"
+          test -s "$SO_PATH"
+          file "$SO_PATH"

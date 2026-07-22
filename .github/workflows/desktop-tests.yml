@@ -3,8 +3,10 @@ name: Desktop tests
 # ARCHITECTURE.md repeatedly refers to things as "verified in CI" (e.g. section 4's GLM
 # packed/aligned-type question) - this is the first real CI that exists to do that verifying.
 # Desktop-only: the desktop-debug preset (BUILDING.md) needs no Android/Kotlin toolchain, unlike
-# the Android presets, which depend on machine-local paths in the gitignored
-# CMakeUserPresets.json and are out of scope for a hosted runner without real, separate setup work.
+# the Android presets, which normally depend on machine-local paths in the gitignored
+# CMakeUserPresets.json. See android-build.yml (same directory) for the real, separate setup work
+# that builds the Android presets in CI instead - a real SDK/NDK/kotlinc download plus
+# tools/kotlin-classpath-resolver/ standing in for CMakeUserPresets.json's machine-local paths.
 
 on:
   push:
