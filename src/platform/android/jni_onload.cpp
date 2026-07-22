@@ -87,13 +87,14 @@ void increment_heartbeat_counters(konative::ecs::Registry& registry, float /*del
     }
 }
 
-// Resolves the "real open item, not yet decided" flagged by both include/konative/app/entry_point
-// .hpp and include/konative/app/detail/lifecycle_bridge.hpp's own doc comments: the C++ ECS/events
-// core (World/Registry/Dispatcher) has been buildable since the very first commit but was never
-// actually instantiated anywhere in the real, shipping app - only desktop tests/examples ever ran
-// it. KonativeEntryPoint.kt's own ActivityLifecycleCallbacks (already registered for Jetpack's
-// Lifecycle system, for Compose's own sake) now ALSO calls back into native code on each of the 4
-// transitions konative::app::Application models (see the RegisterNatives call below and
+// Resolved the "real open item, not yet decided" that both include/konative/app/entry_point.hpp
+// and include/konative/app/detail/lifecycle_bridge.hpp's own doc comments used to flag (both
+// updated 2026-07-22 to describe this real wiring instead of the stale open-item framing): the C++
+// ECS/events core (World/Registry/Dispatcher) had been buildable since the very first commit but
+// was never actually instantiated anywhere in the real, shipping app - only desktop tests/examples
+// ever ran it. KonativeEntryPoint.kt's own ActivityLifecycleCallbacks (already registered for
+// Jetpack's Lifecycle system, for Compose's own sake) now ALSO calls back into native code on each
+// of the 4 transitions konative::app::Application models (see the RegisterNatives call below and
 // KonativeEntryPoint.kt's nativeDispatchLifecycle) - this class is the one real
 // konative::app::create_application() implementation for this target, "implemented by the
 // application author, exactly once per binary" per entry_point.hpp's own contract.
