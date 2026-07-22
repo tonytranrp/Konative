@@ -15,7 +15,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
 
 option(KONATIVE_BUILD_EXAMPLES "Build examples/" ${PROJECT_IS_TOP_LEVEL})
 option(KONATIVE_BUILD_TESTS "Build tests/" ${PROJECT_IS_TOP_LEVEL})
-option(KONATIVE_BUILD_KOTLIN_NATIVE "Compile and link the Kotlin/Native side (native/) - see ARCHITECTURE.md section 6.3 for the linking risk this carries" ON)
+option(KONATIVE_BUILD_KOTLIN_NATIVE "Compile and link the Kotlin/Native side (native/) - fully superseded for rendering (ARCHITECTURE.md section 9), default OFF; opt in only to revive this frozen path for a real non-rendering need - see section 6.3 for the linking risk that carries" OFF)
 
 # See ARCHITECTURE.md section 4 - CPM.cmake is vendored in-tree (cmake/CPM.cmake), never
 # downloaded fresh at configure time, so that a cold clone + a warm CPM_SOURCE_CACHE can
