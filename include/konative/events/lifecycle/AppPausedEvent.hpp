@@ -1,5 +1,7 @@
 #pragma once
 
+#include "konative/core/type_traits.hpp"
+
 namespace konative::events::lifecycle {
 
 // Historically mirrored APP_CMD_PAUSE / GameActivity's onPause - neither applies anymore
@@ -9,5 +11,7 @@ namespace konative::events::lifecycle {
 // detail/lifecycle_bridge.hpp's dispatch_paused() -> Application::pause(), called from
 // jni_onload.cpp's native_dispatch_lifecycle_event() on the real Activity's onActivityPaused.
 struct AppPausedEvent {};
+
+static_assert(konative::core::EventType<AppPausedEvent>);
 
 } // namespace konative::events::lifecycle

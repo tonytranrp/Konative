@@ -1,5 +1,7 @@
 #pragma once
 
+#include "konative/core/type_traits.hpp"
+
 namespace konative::events::window {
 
 // Mirrors onNativeWindowDestroyed - the ANativeWindow the last WindowCreatedEvent referenced is
@@ -9,5 +11,7 @@ namespace konative::events::window {
 // section 6.7), so this event currently has no live consumer either (see WindowCreatedEvent.hpp's
 // own comment); kept for a possible future non-Compose native-window use.
 struct WindowDestroyedEvent {};
+
+static_assert(konative::core::EventType<WindowDestroyedEvent>);
 
 } // namespace konative::events::window

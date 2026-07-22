@@ -1,5 +1,7 @@
 #pragma once
 
+#include "konative/core/type_traits.hpp"
+
 namespace konative::events::lifecycle {
 
 // Historically mirrored APP_CMD_RESUME / GameActivity's onResume - neither applies anymore
@@ -9,5 +11,7 @@ namespace konative::events::lifecycle {
 // detail/lifecycle_bridge.hpp's dispatch_resumed() -> Application::resume(), called from
 // jni_onload.cpp's native_dispatch_lifecycle_event() on the real Activity's onActivityResumed.
 struct AppResumedEvent {};
+
+static_assert(konative::core::EventType<AppResumedEvent>);
 
 } // namespace konative::events::lifecycle

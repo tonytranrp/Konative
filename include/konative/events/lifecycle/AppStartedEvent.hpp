@@ -1,5 +1,7 @@
 #pragma once
 
+#include "konative/core/type_traits.hpp"
+
 namespace konative::events::lifecycle {
 
 // Fired once, after the native entry point has finished bootstrapping (World constructed).
@@ -12,5 +14,7 @@ namespace konative::events::lifecycle {
 // from Application::start(), itself called by src/platform/android/jni_onload.cpp's
 // native_dispatch_lifecycle_event() on the real Activity's onActivityCreated, via RegisterNatives.
 struct AppStartedEvent {};
+
+static_assert(konative::core::EventType<AppStartedEvent>);
 
 } // namespace konative::events::lifecycle

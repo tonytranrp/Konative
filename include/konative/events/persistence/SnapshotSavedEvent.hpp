@@ -2,6 +2,8 @@
 
 #include <cstddef>
 
+#include "konative/core/type_traits.hpp"
+
 namespace konative::events::persistence {
 
 // Fired from a background thread (via konative::scheduling::CrossThreadEventQueue<SnapshotSavedEvent>
@@ -14,5 +16,7 @@ namespace konative::events::persistence {
 struct SnapshotSavedEvent {
     std::size_t byte_size = 0;
 };
+
+static_assert(konative::core::EventType<SnapshotSavedEvent>);
 
 } // namespace konative::events::persistence

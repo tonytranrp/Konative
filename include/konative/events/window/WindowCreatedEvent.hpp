@@ -1,5 +1,7 @@
 #pragma once
 
+#include "konative/core/type_traits.hpp"
+
 struct ANativeWindow;
 
 namespace konative::events::window {
@@ -13,5 +15,7 @@ namespace konative::events::window {
 struct WindowCreatedEvent {
     ANativeWindow* native_window = nullptr;
 };
+
+static_assert(konative::core::EventType<WindowCreatedEvent>);
 
 } // namespace konative::events::window
