@@ -1,8 +1,9 @@
 #pragma once
 
-#include <cassert>
 #include <jni.h>
 #include <type_traits>
+
+#include "konative/core/assert.hpp"
 
 // RAII wrappers around JNI references - ported from GameHub's libs/jni/include/gamehub/jni/ref.hpp
 // (real, working, on-device-proven code - see ARCHITECTURE.md section 6.6), not reinvented.
@@ -99,8 +100,8 @@ public:
 
     GlobalRef& operator=(GlobalRef&& other) noexcept {
         if (this != &other) {
-            assert(obj_ == nullptr &&
-                   "GlobalRef<T> move-assigned over a still-live global ref - call reset(env) first");
+            KONATIVE_ASSERT(obj_ == nullptr,
+                            "GlobalRef<T> move-assigned over a still-live global ref - call reset(env) first");
             obj_ = other.obj_;
             other.obj_ = nullptr;
         }
