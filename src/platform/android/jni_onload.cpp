@@ -14,6 +14,7 @@
 #include "konative/core/log.hpp"
 #include "konative/embed/checked_blob.hpp"
 #include "konative/jni/dex_loader.hpp"
+#include "konative/scheduling/taskflow_self_check.hpp"
 
 extern "C" {
 extern const unsigned char konative_app_dex_start[];
@@ -59,6 +60,27 @@ public:
     void on_started() override {
         konative::core::log_info(
             "KonativeAndroidApp: on_started (World constructed, first real Activity created)");
+
+        // ARCHITECTURE.md section 9's one dependency in this stack with "no confirmed track record
+        // either way" on Android NDK specifically (every other dependency there has real cited
+        // precedent) - runs once at real startup, on the real device, not just at desktop-debug
+        // build time. A real, permanent regression guard against a future NDK/toolchain upgrade
+        // silently breaking Taskflow's threading on this target, not a one-off spike thrown away
+        // after proving it once.
+        bool taskflow_ok = konative::scheduling::run_taskflow_self_check();
+        if (taskflow_ok) {
+            konative::core::log_info(
+                "KonativeAndroidApp: Taskflow self-check PASSED on this device/ABI - real parallel "
+                "task scheduling confirmed correct (ARCHITECTURE.md section 9's previously "
+                "unconfirmed risk).");
+        } else {
+            konative::core::log_error(
+                "KonativeAndroidApp: Taskflow self-check FAILED on this device/ABI - real parallel "
+                "task scheduling produced a wrong result. This does not affect Compose rendering "
+                "(nothing else in this app currently depends on Taskflow), but confirms "
+                "ARCHITECTURE.md section 9's flagged risk is real on this specific target - do not "
+                "build further architecture on Taskflow here without investigating first.");
+        }
     }
     void on_resumed() override { konative::core::log_info("KonativeAndroidApp: on_resumed"); }
     void on_paused() override { konative::core::log_info("KonativeAndroidApp: on_paused"); }

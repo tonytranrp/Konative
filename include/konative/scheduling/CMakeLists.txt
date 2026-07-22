@@ -8,6 +8,7 @@ target_sources(konative_scheduling INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/task_graph.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/thread_pool.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cross_thread_event_queue.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/taskflow_self_check.hpp
 )
 
 target_link_libraries(konative_scheduling INTERFACE

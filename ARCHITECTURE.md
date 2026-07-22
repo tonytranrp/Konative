@@ -491,6 +491,7 @@ class does declare the no-arg constructor R8 was stripping.
 | Kotlin/Native (`native/src/Renderer.kt`, EGL/GLES rendering) | **Fully superseded for rendering** — kept only as a historical record; do not extend |
 | Cross-thread event posting (`include/konative/scheduling/cross_thread_event_queue.hpp`) | **Landed and verified** — `konative::scheduling::CrossThreadEventQueue<Event>`, the `concurrentqueue`-backed MPMC boundary `events/dispatcher.hpp` and this module's own README had long specified but never implemented; `post()` from any thread, `drain_into(Dispatcher&)` from exactly one (the frame thread). Desktop-verified with a real multi-`std::thread` stress test (8 producers × 5000 events), confirming none lost, none duplicated |
 | C++ ECS/events core (`World`/`Application`) actually running in the real app, driven by real Android Activity lifecycle AND a real per-frame heartbeat | **Landed and verified on real hardware** — previously buildable since the first commit but never instantiated anywhere outside desktop tests/examples (the "real open item, not yet decided" `include/konative/app/entry_point.hpp` and `detail/lifecycle_bridge.hpp` both flagged). `jni_onload.cpp` implements `create_application()` and binds `KonativeEntryPoint.nativeDispatchLifecycle(Int)`/`nativeTick(Float)` via `RegisterNatives`; the embedded dex's existing `ActivityLifecycleCallbacks` calls the former on each of the 4 transitions `Application` models, and a `Choreographer.FrameCallback` (`FrameTicker`, started/stopped alongside resume/pause) calls the latter once per real display frame, driving `World::tick()` for the first time — confirmed via real logcat across a full start→resume→pause→resume→destroy session with periodic tick-count proof, plus new desktop unit coverage (`tests/test_app.cpp`) |
+| Taskflow real-hardware self-check (`include/konative/scheduling/taskflow_self_check.hpp`) | **Landed and verified on real hardware** — resolves §9's own "no confirmed track record either way" flag for Taskflow on Android NDK; runs a real, verifiably-correct parallel computation once at real startup (`jni_onload.cpp`'s `on_started()`), confirmed PASSED on the physical phone (arm64-v8a, API 36) via logcat, kept as a permanent regression guard rather than a one-off spike |
 
 ---
 
@@ -633,6 +634,14 @@ been combined before by anyone found in this research.
 - A near-zero-Kotlin/Java APK shell (`GameHub/testapp`'s `MainActivity` is a real, on-device-proven
   instance of exactly this shape, `System.loadLibrary()` and nothing else — Konative's own
   `testapp/` matches this shape exactly, per §6.4).
+- **Taskflow's real thread-spawning/scheduling machinery on Android NDK arm64-v8a** — moved here
+  from the unproven list below after `konative::scheduling::run_taskflow_self_check()`
+  (`include/konative/scheduling/taskflow_self_check.hpp`) actually ran, for real, on the physical
+  phone (`R3GL10AHL7P`, API 36): a small parallel computation split across several real Taskflow
+  tasks, verified against the mathematically-correct expected sum, not just "didn't crash." Kept as
+  a permanent startup self-check (`jni_onload.cpp`'s `on_started()`), matching this framework's own
+  "code checks itself" principle — real regression protection against a future NDK/toolchain
+  upgrade silently breaking this, not a one-off spike thrown away after proving it once.
 
 **Architecturally sound synthesis, partially de-risked by real prior art, still not fully
 validated — prototype first:**
@@ -655,8 +664,6 @@ validated — prototype first:**
 - `entt::meta` combined with Boost.PFR for auto-registration, or with Glaze for
   reflection-driven JSON serialization (both philosophically clean, neither found done anywhere).
 - An `entt::dispatcher` + `libcoro` "await the next event" pattern.
-- Taskflow specifically on Android NDK (no confirmed track record either way — its dependency
-  surface is pure `std::thread`/`std::atomic`, so risk is judged low, not zero).
 
 Treat the second list as the actual R&D risk of this project. Everything in the first list is
 "assemble known-good pieces"; everything in the second list needs a real spike/prototype before
