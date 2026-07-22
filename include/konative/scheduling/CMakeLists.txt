@@ -7,10 +7,12 @@ target_sources(konative_scheduling INTERFACE
   FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/task_graph.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/thread_pool.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cross_thread_event_queue.hpp
 )
 
 target_link_libraries(konative_scheduling INTERFACE
   konative::core
+  konative::events
   Taskflow
   bshoshany_thread_pool
   concurrentqueue
