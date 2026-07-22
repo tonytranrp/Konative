@@ -139,10 +139,13 @@ EnTT (`skypjack/entt`) supplies three things Konative uses directly:
 - No EnTT-maintainer-published guidance exists on `entt::meta` compile-time cost at scale; the
   mitigations in §2 are general C++ template-heavy-project practice applied to EnTT's specific
   registration API, not EnTT doctrine.
-- Combining `entt::meta` with Boost.PFR (to auto-generate registration calls from aggregate
-  reflection instead of hand-writing `.data<>()` per field) and combining `entt::meta` with Glaze
-  (§4) are both **architecturally sound but unvalidated in the wild** — no third-party project
-  doing either was found. Treat both as prototype-first, not copy-from-precedent.
+- **Update (2026-07-22): `entt::meta` + Boost.PFR auto-registration is now real, not just
+  architecturally sound** — `include/konative/reflect/pfr_auto_registration.hpp` (spike/prototype
+  landed, self-checked, verified on real hardware; see §9 below for the full writeup, including a
+  real, non-obvious `entt::forward_as_meta()` pitfall found and fixed along the way).
+  `entt::meta` + Glaze (§4) remains **architecturally sound but unvalidated in the wild** — no
+  third-party project doing it was found, and this session didn't prototype it either. Treat it as
+  prototype-first, not copy-from-precedent.
 - **C++20 minimum.** Current EnTT (`main`) requires "a full-featured compiler that supports at
   least C++20" — stricter than older EnTT tags. Pin to a specific tag matching the NDK Clang
   version actually in use, and verify C++20 conformance before tracking `main`.
@@ -730,12 +733,32 @@ been combined before by anyone found in this research.
 
 **Architecturally sound synthesis, partially de-risked by real prior art, still not fully
 validated — prototype first:**
-- `entt::meta` combined with Boost.PFR for auto-registration, or with Glaze for
-  reflection-driven JSON serialization (both philosophically clean, neither found done anywhere).
+- `entt::meta` combined with Glaze for reflection-driven JSON serialization (philosophically
+  clean, not found done anywhere as prior art).
 
-Treat the second list as the actual R&D risk of this project. Everything in the first list is
-"assemble known-good pieces"; everything in the second list needs a real spike/prototype before
-committing further architecture on top of an assumption that it works. **The very first end-to-end
+Treat this as the actual remaining R&D risk of this project's reflection surface - it needs a real
+spike/prototype before committing further architecture on top of an assumption that it works, the
+same way `entt::meta` + Boost.PFR did until 2026-07-22.
+
+**Update (2026-07-22): `entt::meta` + Boost.PFR auto-registration - landed, not just prototyped.**
+`include/konative/reflect/pfr_auto_registration.hpp`'s `reflect_component_auto<T>()` auto-registers
+every field of an aggregate component via `boost::pfr::get<I>()`/`get_name<I,T>()`, using EnTT's
+`meta_factory<T>::data<Setter,Getter>(id)` overload (a getter/setter function-pointer pair, since
+PFR's structural reflection can't produce a real pointer-to-data-member `&T::field` for
+`.data<&Data>(id)` the way hand-written registration does) - closing over the field index with a
+real function template per field, not a lambda (a real, plain function pointer is what the
+Setter/Getter non-type template parameters need). A real, non-obvious bug was found and fixed
+landing the self-check that proves this: `entt::forward_as_meta(instance)` produces a `meta_any`
+PRVALUE, and `meta_data::set()`/`get()` built from THAT temporary silently failed to enable
+mutation (confirmed via a from-scratch minimal repro using EnTT's own plain
+pointer-to-data-member registration - not specific to PFR at all); the fix is passing the real
+instance directly, relying on `meta_handle`'s own implicit `Type&` constructor.
+`run_pfr_auto_registration_self_check()` runs for real at every app startup (same permanent
+regression-guard pattern as the Taskflow/`BS::thread_pool`/EnTT-snapshot+cereal self-checks) and is
+confirmed passing on real hardware (LDPlayer x86_64 emulator, clean logcat, no regressions in
+anything else `on_started()` already does).
+
+**The very first end-to-end
 milestone for this framework was exactly this: get a trivial Compose UI (a solid-color `Box`, real
 `BasicText` — see §6.6/§6.7) to actually render as `MainActivity`'s content view on a connected test
 device, driven entirely by `JNI_OnLoad`** — achieved and repeatedly re-verified on real hardware
