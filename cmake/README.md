@@ -39,3 +39,22 @@ every Konative-authored CMake module (`modules/`).
 A new module here should be a new `Konative*.cmake` file exposing one clear CMake function (or a
 small, related set) — following `KonativeKotlinNative.cmake`'s existing shape: one function,
 documented gotchas in a top comment, a two-layer `IMPORTED`/`ALIAS` target result.
+
+**Known, real inconsistency, left alone deliberately (found by a research-doc audit, 2026-07-22)**:
+`KonativeEmbedBlob.cmake`/`KonativeEmbedKotlinDex.cmake` — the two modules that actually build the
+real shipping `.so`'s embedded dex/resources.arsc — do NOT follow the two-layer target convention
+above; both take the final consuming target directly and mutate it (`target_sources()`/
+`add_dependencies()`) rather than producing an intermediate `konative::embed::<name>`-style
+`ALIAS`/`IMPORTED` target. `research/research.md` §3/§9 recommends this exact pattern (modeled on
+corrosion's own two-layer target model), and it WAS applied to the now-historical
+`KonativeKotlinNative.cmake` — just never carried to these two, which are the ones that matter now.
+The benefit ("the embedding mechanism can change later without breaking the public target name") is
+real but purely hypothetical today - there is exactly one real consumer
+(`src/platform/android/CMakeLists.txt`'s `konative_app_native`), nothing is currently broken, and
+this pair of functions already has several documented sharp edges (GAS-directive/`enable_language
+(ASM)`-ordering gotchas, `KonativeEmbedBlob.cmake`'s own comments) that make a structural refactor
+of working, delicate, load-bearing build machinery a real risk for a benefit that doesn't have a
+present need - the same "don't build for a hypothetical future requirement" restraint this
+project's coding-style rules apply to C++, self-applied here to CMake. Revisit if a second real
+consumer, or an actual need to swap the embedding mechanism, ever materializes - don't refactor this
+preemptively for consistency alone.

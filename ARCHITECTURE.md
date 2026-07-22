@@ -839,3 +839,10 @@ This document synthesizes, in order:
 9. Agent — Kotlin/Native calling EGL/GLES/Vulkan directly via `cinterop` (the mechanics behind
    §6.2's rendering-moved-into-Kotlin revision), plus real-world per-module `README.md`
    conventions (§12) and minimal Gradle-driven `externalNativeBuild` test-app patterns (§13).
+10. `research/jni_activity_bootstrap_research.md` — the native-triggered `ActivityLifecycleCallbacks`
+    / `ViewTree*Owner`-fabrication design directly grounding §6.4, load-bearing for the *current*
+    design (found missing from this list by a research-doc audit, 2026-07-22 — this section had
+    gone stale after the Compose/dex-embedding pivot even though §6.4/§6.5/§8 already correctly cite
+    both docs below by name; this entry and #11 restore consistency with those).
+11. `research/incbin_embedding_research.md` — the concrete `.incbin`/GAS-directive/build-graph
+    recipe directly grounding §6.5, equally load-bearing for the current design.
