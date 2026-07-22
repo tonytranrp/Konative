@@ -170,10 +170,16 @@ function(konative_embed_kotlin_dex TARGET_NAME)
       endif()
     endif()
     if(NOT KONATIVE_R8)
+      # NATURAL-sorted descending before GET 0, same as the KONATIVE_ANDROID_JAR/KONATIVE_AAPT2
+      # blocks above - a real, latent inconsistency found while tracing through this for CI (an
+      # unsorted file(GLOB) result is filesystem order, not version order, so index 0 could
+      # silently pick an older/wrong cmdline-tools install whenever more than one is present, e.g.
+      # a runner image's pre-installed cmdline-tools plus a freshly-installed one).
       file(GLOB _konative_r8_candidates
         "${_konative_sdk_root}/cmdline-tools/*/bin/r8.bat"
         "${_konative_sdk_root}/cmdline-tools/*/bin/r8")
       if(_konative_r8_candidates)
+        list(SORT _konative_r8_candidates COMPARE NATURAL ORDER DESCENDING)
         list(GET _konative_r8_candidates 0 KONATIVE_R8)
       endif()
     endif()

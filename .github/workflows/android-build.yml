@@ -33,8 +33,13 @@ jobs:
       KOTLIN_VERSION: "2.4.0"
       # Same NDK "r28" family as this project's own proven-working CMakeUserPresets.json entries
       # (android-ndk-r28, machine-local/gitignored) - a specific version, not "whatever's on the
-      # runner today", so this build stays reproducible as the runner image evolves.
-      NDK_VERSION: "28.2.13676358"
+      # runner today", so this build stays reproducible as the runner image evolves. nttld/setup-ndk
+      # expects the classic "rXXy" release-name format (confirmed via its own README examples,
+      # e.g. r27d), NOT the numeric major.minor.build form (e.g. 28.2.13676358) sdkmanager/Android
+      # Studio use for side-by-side NDK installs - r28c is the latest real, currently-published r28
+      # point release (verified: dl.google.com/.../android-ndk-r28c-linux.zip is a real 200; r28a
+      # was never published, a real 404 - Google's own naming skipped straight to r28b).
+      NDK_VERSION: "r28c"
     steps:
       - uses: actions/checkout@v4
 
