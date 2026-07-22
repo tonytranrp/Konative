@@ -16,6 +16,8 @@
 #include "konative/events/input/TouchDownEvent.hpp"
 #include "konative/events/input/TouchMoveEvent.hpp"
 #include "konative/events/input/TouchUpEvent.hpp"
+#include "konative/events/window/WindowFocusChangedEvent.hpp"
+#include "konative/events/window/WindowResizedEvent.hpp"
 #include "konative/jni/dex_loader.hpp"
 #include "konative/scheduling/taskflow_self_check.hpp"
 
@@ -129,6 +131,15 @@ public:
         world().events().sink<konative::events::input::TouchDownEvent>().connect<&KonativeAndroidApp::on_touch_down>(*this);
         world().events().sink<konative::events::input::TouchMoveEvent>().connect<&KonativeAndroidApp::on_touch_move>(*this);
         world().events().sink<konative::events::input::TouchUpEvent>().connect<&KonativeAndroidApp::on_touch_up>(*this);
+
+        // WindowResizedEvent/WindowFocusChangedEvent - unlike WindowCreatedEvent/WindowDestroyedEvent
+        // (whose own doc comments correctly note they're tied to the superseded EGL/Vulkan
+        // native-window rendering path and have "no live consumer" by design, not an oversight),
+        // resize/focus are generic window facts that apply just as well to a Compose-rendered
+        // window - a real, current driving need, not speculative. Real producer:
+        // KonativeRootComposable's Modifier.onSizeChanged + LocalWindowInfo.current.isWindowFocused.
+        world().events().sink<konative::events::window::WindowResizedEvent>().connect<&KonativeAndroidApp::on_window_resized>(*this);
+        world().events().sink<konative::events::window::WindowFocusChangedEvent>().connect<&KonativeAndroidApp::on_window_focus_changed>(*this);
     }
     void on_resumed() override { konative::core::log_info("KonativeAndroidApp: on_resumed"); }
     void on_paused() override { konative::core::log_info("KonativeAndroidApp: on_paused"); }
@@ -193,6 +204,17 @@ private:
         konative::core::log_info(
             "KonativeAndroidApp: TouchUpEvent pointer={} x={:.1f} y={:.1f} (total touch events: {})",
             event.pointer_id, event.x, event.y, touch_event_count_);
+    }
+
+    // Real window facts, discrete and rare (unlike per-frame ticks or user-paced touches) - logged
+    // every occurrence, no counter/UI display needed for a first, on-device-verifiable proof.
+    void on_window_resized(const konative::events::window::WindowResizedEvent& event) {
+        konative::core::log_info("KonativeAndroidApp: WindowResizedEvent {}x{}", event.width,
+                                  event.height);
+    }
+    void on_window_focus_changed(const konative::events::window::WindowFocusChangedEvent& event) {
+        konative::core::log_info("KonativeAndroidApp: WindowFocusChangedEvent has_focus={}",
+                                  event.has_focus);
     }
 
     static constexpr std::uint64_t kTickLogInterval = 120; // ~1-2s of real frames on typical hardware
@@ -292,6 +314,20 @@ void JNICALL native_dispatch_touch_up(JNIEnv*, jclass, jint pointer_id, jfloat x
 // state" pattern as native_get_tick_count() above, for the new touch-event counter.
 jlong JNICALL native_get_touch_count(JNIEnv*, jclass) {
     return static_cast<jlong>(android_app().touch_event_count());
+}
+
+// Bound to KonativeEntryPoint.nativeDispatchWindowResized(Int, Int) - real producer is
+// KonativeRootComposable's Modifier.onSizeChanged, see KonativeAndroidApp::on_started()'s comment.
+void JNICALL native_dispatch_window_resized(JNIEnv*, jclass, jint width, jint height) {
+    android_app().world().events().trigger(konative::events::window::WindowResizedEvent{
+        static_cast<std::int32_t>(width), static_cast<std::int32_t>(height)});
+}
+
+// Bound to KonativeEntryPoint.nativeDispatchWindowFocusChanged(Boolean) - real producer is
+// KonativeRootComposable reading LocalWindowInfo.current.isWindowFocused inside a LaunchedEffect.
+void JNICALL native_dispatch_window_focus_changed(JNIEnv*, jclass, jboolean has_focus) {
+    android_app().world().events().trigger(
+        konative::events::window::WindowFocusChangedEvent{has_focus == JNI_TRUE});
 }
 
 } // namespace
@@ -411,16 +447,27 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
             const_cast<char*>("()J"),
             reinterpret_cast<void*>(&native_get_touch_count),
         },
+        {
+            const_cast<char*>("nativeDispatchWindowResized"),
+            const_cast<char*>("(II)V"),
+            reinterpret_cast<void*>(&native_dispatch_window_resized),
+        },
+        {
+            const_cast<char*>("nativeDispatchWindowFocusChanged"),
+            const_cast<char*>("(Z)V"),
+            reinterpret_cast<void*>(&native_dispatch_window_focus_changed),
+        },
     };
-    if (env->RegisterNatives(loaded.value().clazz.get(), native_methods, 7) != JNI_OK ||
-        konative::jni::check_and_clear_exception(env, "RegisterNatives(nativeDispatchLifecycle/nativeTick/nativeGetTickCount/nativeDispatchTouch*/nativeGetTouchCount)")) {
+    if (env->RegisterNatives(loaded.value().clazz.get(), native_methods, 9) != JNI_OK ||
+        konative::jni::check_and_clear_exception(env, "RegisterNatives(nativeDispatchLifecycle/nativeTick/nativeGetTickCount/nativeDispatchTouch*/nativeGetTouchCount/nativeDispatchWindow*)")) {
         konative::core::log_error(
             "JNI_OnLoad: RegisterNatives(nativeDispatchLifecycle/nativeTick/nativeGetTickCount/"
-            "nativeDispatchTouch*/nativeGetTouchCount) failed - the C++ ECS/events core will not "
-            "receive real Activity lifecycle transitions, ticks, or touches this run, and the UI "
-            "will not show live tick/touch counts. Compose rendering is otherwise unaffected (these "
-            "native methods are unrelated to install()'s own handoff below); Kotlin's own call sites "
-            "are individually try/caught for exactly this case, see KonativeEntryPoint.kt.");
+            "nativeDispatchTouch*/nativeGetTouchCount/nativeDispatchWindow*) failed - the C++ "
+            "ECS/events core will not receive real Activity lifecycle transitions, ticks, touches, "
+            "or window resize/focus events this run, and the UI will not show live tick/touch "
+            "counts. Compose rendering is otherwise unaffected (these native methods are unrelated "
+            "to install()'s own handoff below); Kotlin's own call sites are individually try/caught "
+            "for exactly this case, see KonativeEntryPoint.kt.");
     }
 
     // Step 6: ONE handoff call, then native code is done - everything past this point (Compose

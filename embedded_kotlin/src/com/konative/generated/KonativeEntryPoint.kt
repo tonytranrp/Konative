@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -23,7 +24,9 @@ import androidx.compose.ui.input.pointer.changedToDown
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -139,6 +142,16 @@ object KonativeEntryPoint {
     // show real C++-side state" pattern as nativeGetTickCount() above.
     @JvmStatic
     external fun nativeGetTouchCount(): Long
+
+    // Same RegisterNatives contract, bound to native_dispatch_window_resized/
+    // native_dispatch_window_focus_changed - real producers are KonativeRootComposable's
+    // Modifier.onSizeChanged and a LaunchedEffect reading LocalWindowInfo.current.isWindowFocused
+    // (see jni_onload.cpp's own on_started() comment for why these two specifically, and not
+    // WindowCreatedEvent/WindowDestroyedEvent, were wired).
+    @JvmStatic
+    external fun nativeDispatchWindowResized(width: Int, height: Int)
+    @JvmStatic
+    external fun nativeDispatchWindowFocusChanged(hasFocus: Boolean)
 }
 
 // Backs KonativeRootComposable's live tick-count display - a plain, object-scoped
@@ -282,6 +295,29 @@ private fun queryTouchCountFromNative(): Long {
     }
 }
 
+// Same try/catch-wrapped shape as dispatchTouchDownToNative() above, for the same reason - driven
+// by KonativeRootComposable's Modifier.onSizeChanged.
+private fun dispatchWindowResizedToNative(width: Int, height: Int) {
+    try {
+        KonativeEntryPoint.nativeDispatchWindowResized(width, height)
+    } catch (e: UnsatisfiedLinkError) {
+        Log.e("Konative", "dispatchWindowResizedToNative: nativeDispatchWindowResized unavailable " +
+            "- the C++ ECS/events core will not see this resize; Compose rendering is unaffected.", e)
+    }
+}
+
+// Same try/catch-wrapped shape, driven by KonativeRootComposable's LaunchedEffect reading
+// LocalWindowInfo.current.isWindowFocused.
+private fun dispatchWindowFocusChangedToNative(hasFocus: Boolean) {
+    try {
+        KonativeEntryPoint.nativeDispatchWindowFocusChanged(hasFocus)
+    } catch (e: UnsatisfiedLinkError) {
+        Log.e("Konative", "dispatchWindowFocusChangedToNative: nativeDispatchWindowFocusChanged " +
+            "unavailable - the C++ ECS/events core will not see this focus change; Compose " +
+            "rendering is unaffected.", e)
+    }
+}
+
 // Selects between the two real resources.arsc mechanisms (see embedded_kotlin/README.md's Update
 // sections for the full writeup of both): the general, API-30+ ResourcesLoader mechanism
 // (KonativeResourcesLoader.kt) if it installs successfully - which mutates the real Activity's own
@@ -338,12 +374,23 @@ private class ComposeHostOwner : LifecycleOwner, ViewModelStoreOwner, SavedState
 // observes every real pointer change (down/move/up, any number of simultaneous pointers) without
 // calling change.consume(), deliberately: this is a passive relay into the C++ event Dispatcher, not
 // a gesture handler competing for input with some other UI element (there isn't one here yet).
+// WindowFocusChangedEvent's real producer: LocalWindowInfo.current.isWindowFocused is a real
+// Compose snapshot-State-backed value (androidx.compose.ui.platform.WindowInfo) - reading it here
+// and keying a LaunchedEffect on it is the idiomatic Compose way to react to it changing, without
+// needing to subclass ComposeView (which is `final` - confirmed via javap before attempting this;
+// View.onWindowFocusChanged()/ViewTreeObserver would have been the fallback had LocalWindowInfo not
+// existed in this vendored Compose version).
 @Composable
 private fun KonativeRootComposable() {
+    val windowInfo = LocalWindowInfo.current
+    LaunchedEffect(windowInfo.isWindowFocused) {
+        dispatchWindowFocusChangedToNative(windowInfo.isWindowFocused)
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF1B5E20))
+            .onSizeChanged { size -> dispatchWindowResizedToNative(size.width, size.height) }
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
