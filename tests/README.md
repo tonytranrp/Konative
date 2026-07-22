@@ -19,7 +19,7 @@ template-heavy header-only codebase).
   many files without a real reason.
 - **Tests must build and run on desktop (`desktop-debug` preset).** Anything genuinely Android-only
   (real EGL/GLES/Vulkan behavior, real lifecycle callbacks) is NOT unit-testable here — it belongs
-  in `testapp/`'s on-device verification loop (`ARCHITECTURE.md` §13) instead. Don't try to mock
+  in `testapp/`'s on-device verification loop (`ARCHITECTURE.md` §11) instead. Don't try to mock
   Android platform APIs just to get a test running here; that's the wrong layer for it.
 - **A test for a `detail/` header tests it through its module's public API where possible**, not
   by reaching into `detail::` namespaces directly — if a `detail/` helper genuinely can't be

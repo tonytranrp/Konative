@@ -2,7 +2,7 @@
 
 > **SUPERSEDED FOR RENDERING (confirmed 2026-07-18, not pending)**: rendering moved to JVM-hosted
 > Jetpack Compose, dex-embedded and loaded via `InMemoryDexClassLoader` — this has landed and been
-> verified end-to-end on real hardware (`ARCHITECTURE.md` §6.6/§6.7/§13), not just proposed. The
+> verified end-to-end on real hardware (`ARCHITECTURE.md` §6.6/§6.7/§11), not just proposed. The
 > Kotlin/Native-AOT-compiled-EGL approach this folder documents/contains (`src/Renderer.kt`) is
 > fully superseded and frozen — kept only as a historical record, not "pending deletion once the
 > replacement is built": the replacement has been built, shipped, and re-verified multiple times

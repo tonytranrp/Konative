@@ -31,12 +31,12 @@
 > non-emulated silicon. That distinction stopped being hypothetical on 2026-07-18: the full current
 > pipeline was verified, for the first time, on an actual physical device (`R3GL10AHL7P`,
 > Galaxy-S24-class, `arm64-v8a`) via a real `./gradlew assembleDebug` run producing one universal APK
-> — see §13 and `testapp/README.md`. See the `project-konative-autonomous-loop` memory entry for the
+> — see §11 and `testapp/README.md`. See the `project-konative-autonomous-loop` memory entry for the
 > full iteration-by-iteration history.
 
 This document is the synthesized design for Konative: a CMake/C++ framework combining Kotlin and
 C++ into **one native Android `.so`** — rendering and app logic together. Everything below is
-grounded in the research passes summarized in §15 (plus the rendering-direction reversal noted
+grounded in the research passes summarized in §13 (plus the rendering-direction reversal noted
 above).
 
 ---
@@ -613,7 +613,7 @@ Konative/
 │                          testapp/app/src/main/java/com/konative/testapp/MainActivity.kt — that
 │                          calls System.loadLibrary() and nothing else; its own build.gradle.kts
 │                          drives the root CMakeLists.txt end to end (CPM fetch, NDK cross-compile,
-│                          Kotlin+Compose dex build, embed, packaging), §13. NOT NativeActivity/
+│                          Kotlin+Compose dex build, embed, packaging), §11. NOT NativeActivity/
 │                          GameActivity-based, despite what an earlier version of this tree claimed.)
 ├── examples/
 ├── tests/
@@ -624,7 +624,7 @@ Konative/
 ```
 
 Every folder listed above with real content also has its own `README.md` stating that folder's
-hard rules — see §12. Read the local `README.md` before adding a file to any of these folders.
+hard rules — see §10. Read the local `README.md` before adding a file to any of these folders.
 
 **Why this tree needed rewriting**: it originally described the project's *very first* skeleton, from
 before either architecture pivot (§6's own banner). It survived both pivots unchanged, so by this
@@ -750,7 +750,7 @@ in this project depends on that risk being resolved.
 
 ---
 
-## 12. Per-folder guideline convention
+## 10. Per-folder guideline convention
 
 Every folder under `include/konative/`, plus `src/`, `native/`, `testapp/`, `examples/`, `tests/`,
 and `cmake/`, has its own `README.md` stating that folder's specific hard rules — not a repeat of
@@ -763,7 +763,7 @@ per-folder `README.md` states the *local law*.
 
 ---
 
-## 13. `testapp/` and on-device verification
+## 11. `testapp/` and on-device verification
 
 `testapp/` is a real, minimal Android Gradle project whose only job is packaging the `.so` the
 root `CMakeLists.txt` already builds (via Gradle's `externalNativeBuild` pointing straight at that
@@ -812,7 +812,7 @@ verification of this same pipeline had only ever run on the LDPlayer emulator or
 
 ---
 
-## 14. Subagent orchestration rules for continued work on this repo
+## 12. Subagent orchestration rules for continued work on this repo
 
 (Also recorded in memory as `feedback-konative-subagent-rules` — repeating here so it's visible
 in-repo, not just in Claude's memory.)
@@ -826,7 +826,7 @@ in-repo, not just in Claude's memory.)
 
 ---
 
-## 15. Research provenance
+## 13. Research provenance
 
 This document synthesizes, in order:
 1. The original dex-embedding research pass (`research/research.md`) — superseded as the primary
@@ -851,7 +851,7 @@ This document synthesizes, in order:
    the case against a dedicated DI library).
 9. Agent — Kotlin/Native calling EGL/GLES/Vulkan directly via `cinterop` (the mechanics behind
    §6.2's rendering-moved-into-Kotlin revision), plus real-world per-module `README.md`
-   conventions (§12) and minimal Gradle-driven `externalNativeBuild` test-app patterns (§13).
+   conventions (§10) and minimal Gradle-driven `externalNativeBuild` test-app patterns (§11).
 10. `research/jni_activity_bootstrap_research.md` — the native-triggered `ActivityLifecycleCallbacks`
     / `ViewTree*Owner`-fabrication design directly grounding §6.4, load-bearing for the *current*
     design (found missing from this list by a research-doc audit, 2026-07-22 — this section had
