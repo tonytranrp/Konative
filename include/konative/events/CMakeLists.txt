@@ -12,6 +12,8 @@ target_sources(konative_events INTERFACE
   BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/../..
   FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatcher.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/next_event_awaiter.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/next_event_awaiter_self_check.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lifecycle/AppStartedEvent.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lifecycle/AppPausedEvent.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lifecycle/AppResumedEvent.hpp
@@ -27,3 +29,24 @@ target_sources(konative_events INTERFACE
 )
 
 target_link_libraries(konative_events INTERFACE konative::core EnTT::EnTT)
+
+# libcoro is desktop-only for now, NOT linked on Android - a real empirical spike (building
+# next_event_awaiter.hpp for android-arm64) found Android NDK r28's bundled libc++ has no working
+# std::jthread/std::stop_token (confirmed via the ABSENCE of the __cpp_lib_jthread feature-test
+# macro under `#include <version>`, reproduced identically at both --target=...-android26 and
+# ...-android30, so it is not an API-level gate - libcoro's own vendored libc++ build simply doesn't
+# implement it here). libcoro's `coro::task`/`coro::event` (all NextEventAwaiter needs) don't
+# themselves use stop_token, but CMake compiles libcoro as ONE static library target with a fixed
+# source list - condition_variable.cpp/scheduler.cpp/thread_pool.cpp (plus poll.hpp/when_any.hpp
+# transitively) use std::stop_source/stop_token unconditionally, so the WHOLE target fails to build
+# for Android regardless of which headers a consumer actually includes. Excluding just those files
+# via a CPM patch is possible but not a small change (poll.hpp/scheduler.hpp are used more broadly
+# than just condition_variable/when_any) and nothing in Konative currently needs
+# coro::scheduler/thread_pool/condition_variable/when_any - not worth the fork-and-maintain cost
+# until something real needs it. See KonativeDependencies.cmake's libcoro comment and
+# ARCHITECTURE.md section 9 for the full writeup; project_konative_dependency_stack.md memory's
+# "documented Android NDK support" claim is corrected there too - true upstream, not true for this
+# pinned v0.16.0 tag against NDK r28's specific libc++ build.
+if(NOT ANDROID)
+  target_link_libraries(konative_events INTERFACE libcoro)
+endif()

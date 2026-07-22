@@ -8,6 +8,7 @@ add_executable(konative_tests
   test_app.cpp
   test_cross_thread_event_queue.cpp
   test_taskflow_self_check.cpp
+  test_next_event_awaiter.cpp
 )
 target_link_libraries(konative_tests PRIVATE konative::konative doctest::doctest)
 konative_apply_warnings(konative_tests)

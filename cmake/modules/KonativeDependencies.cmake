@@ -95,7 +95,18 @@ CPMAddPackage(
   GIT_TAG v1.0.6
 )
 
-# --- libcoro: C++20 coroutines - the one concurrency lib with documented Android NDK support ---
+# --- libcoro: C++20 coroutines ---
+# CORRECTION (2026-07-22, a real empirical spike building against android-arm64): this was chosen as
+# "the one concurrency lib with documented Android NDK support," but that claim is only true
+# upstream in general, not for this pinned v0.16.0 tag against Android NDK r28's specific libc++
+# build - condition_variable.cpp/scheduler.cpp/thread_pool.cpp need std::jthread/std::stop_token
+# unconditionally, and NDK r28's libc++ has no working implementation of either (confirmed via the
+# __cpp_lib_jthread feature-test macro being absent under <version>, identically at API 26 and API
+# 30 - not an API-level gate, genuinely unimplemented here). See
+# include/konative/events/CMakeLists.txt (libcoro is linked `if(NOT ANDROID)` only) and
+# ARCHITECTURE.md section 9 for the full writeup. coro::task/coro::event (konative::events'
+# NextEventAwaiter) don't themselves need stop_token, but libcoro compiles as one fixed-source-list
+# static library target, so the whole thing fails to build for Android regardless.
 # GIT_SUBMODULES "" is an attempt to skip the vendor/c-ares/c-ares submodule (only needed for
 # LIBCORO_FEATURE_NETWORKING, which is OFF below) - CORRECTION (a code review empirically
 # disproved the original claim here): this does NOT actually skip the submodule. CMake's CMP0097

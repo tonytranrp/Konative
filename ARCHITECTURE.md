@@ -167,7 +167,7 @@ even with `CPM_SOURCE_CACHE` populated.
 | [Taskflow](https://github.com/taskflow/taskflow) | DAG-based job scheduling for ECS systems | Yes | Default scheduler for anything with real cross-system dependencies |
 | [BS::thread_pool](https://github.com/bshoshany/thread-pool) | Simple thread pool | Yes | Use for subsystems that don't need a task graph — don't run both schedulers side by side without a reason |
 | [concurrentqueue](https://github.com/cameron314/concurrentqueue) + [readerwriterqueue](https://github.com/cameron314/readerwriterqueue) | Cross-thread event/job posting | Yes | The producer/consumer boundary in front of `entt::dispatcher` (§5) |
-| [libcoro](https://github.com/jbaldwin/libcoro) | C++20 coroutines | No (compiled) | The only concurrency library surveyed with **explicit documented Android NDK per-ABI support** — strongest maintenance signal found for this exact target |
+| [libcoro](https://github.com/jbaldwin/libcoro) | C++20 coroutines | No (compiled) | Surveyed as the only concurrency library with **explicit documented Android NDK per-ABI support**, but a real spike (§9) found the pinned `v0.16.0` tag does not actually build for Android NDK r28 — `stop_token`/`jthread` are unimplemented in that NDK's libc++. Linked `if(NOT ANDROID)` only; desktop-only for now |
 | [Glaze](https://github.com/stephenberry/glaze) | Config/hot-reload JSON | Yes | Macro-free compile-time reflection — same non-intrusive philosophy as `entt::meta`; unvalidated combination, prototype first |
 | [cereal](https://github.com/USCiLab/cereal) | Binary save-state snapshots | Yes | EnTT's own historically-documented snapshot-API pairing |
 | [Catch2](https://github.com/catchorg/Catch2) or [doctest](https://github.com/doctest/doctest) | Testing | Yes (v2/doctest) | doctest specifically marketed for near-zero compile-time overhead — relevant given §2's compile-time budget |
@@ -666,6 +666,33 @@ been combined before by anyone found in this research.
   a permanent startup self-check (`jni_onload.cpp`'s `on_started()`), matching this framework's own
   "code checks itself" principle — real regression protection against a future NDK/toolchain
   upgrade silently breaking this, not a one-off spike thrown away after proving it once.
+- **The `entt::dispatcher` + `libcoro` "await the next event" pattern** (`konative::events::
+  NextEventAwaiter<Event>`, `include/konative/events/next_event_awaiter.hpp`) — moved here from the
+  unproven list below, but the real spike's answer is the opposite of Taskflow's: the *pattern*
+  itself is real, tested, and correct (`coro::task<T>`'s public `is_ready()`/`resume()` let a desktop
+  test manually drive a consumer coroutine to its real suspension point inside `next()`, fire the
+  event via `dispatcher.trigger<Event>()`, and assert synchronous same-thread resumption via
+  `coro::event`'s documented behavior — including a repeated-await test proving `ready_.reset()`
+  correctly awaits a *fresh* occurrence each time, not a stale one), but **libcoro does not build for
+  Android NDK r28 at all**, contradicting this table's own "documented Android NDK per-ABI support"
+  claim for the pinned `v0.16.0` tag. Root cause, empirically confirmed (not guessed): NDK r28's
+  bundled libc++ has no working `std::jthread`/`std::stop_token` — the `__cpp_lib_jthread`
+  feature-test macro is absent from `<version>`, identically at `--target=...-android26` and
+  `...-android30` (so it's not an API-level gate, genuinely unimplemented here). `coro::task`/
+  `coro::event` themselves never reference `stop_token`, but libcoro compiles as one static-library
+  CMake target with a fixed source list, and `condition_variable.cpp`/`scheduler.cpp`/
+  `thread_pool.cpp` (plus `poll.hpp`/`when_any.hpp` transitively) need it unconditionally, so the
+  *whole* target fails to build for Android regardless of which headers a consumer includes.
+  Excluding just those files via a CPM patch is possible but non-trivial (`poll.hpp`/`scheduler.hpp`
+  are used more broadly than just `condition_variable`/`when_any`) and nothing in Konative currently
+  needs `coro::scheduler`/`thread_pool`/`condition_variable`/`when_any` — not worth forking and
+  maintaining until something real needs it. Resolved pragmatically:
+  `include/konative/events/CMakeLists.txt` links `libcoro` `if(NOT ANDROID)` only — `NextEventAwaiter`
+  is real, tested (desktop `konative_tests`, including a permanent
+  `next_event_awaiter_self_check.hpp` regression guard), and desktop-only, not wired into
+  `jni_onload.cpp`. Re-verified after this fix: both the standalone `android-arm64` CMake preset and
+  a full real `./gradlew assembleDebug` build the app cleanly, installed and ran correctly on the
+  physical phone (`R3GL10AHL7P`) with no regression to any previously-shipped feature.
 
 **Architecturally sound synthesis, partially de-risked by real prior art, still not fully
 validated — prototype first:**
@@ -675,7 +702,6 @@ validated — prototype first:**
   verify-empirically ethos, not an assumption to build further architecture on unverified.
 - `entt::meta` combined with Boost.PFR for auto-registration, or with Glaze for
   reflection-driven JSON serialization (both philosophically clean, neither found done anywhere).
-- An `entt::dispatcher` + `libcoro` "await the next event" pattern.
 
 Treat the second list as the actual R&D risk of this project. Everything in the first list is
 "assemble known-good pieces"; everything in the second list needs a real spike/prototype before
