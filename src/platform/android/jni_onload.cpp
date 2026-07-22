@@ -37,6 +37,26 @@ namespace {
 
 constexpr const char* kEntryPointClass = "com.konative.generated.KonativeEntryPoint";
 
+// A minimal, real ECS component - proving `Registry::create()`/`emplace<T>()` and a real System
+// (registered the standard way, via `World::systems().add()`) actually run in the real, shipping
+// app, not just in desktop unit tests. Everything else this session wired up (Dispatcher/events via
+// lifecycle dispatch, a real per-frame tick driver, Taskflow) proves the rest of the ECS core works
+// here - nothing yet had exercised Registry/View/System together in this app until now.
+struct HeartbeatCounter {
+    std::uint64_t ticks = 0;
+};
+
+// Registered via `world().systems().add()` in `on_started()` below - `SystemSequence::run()` calls
+// every registered system, in registration order, once per real `World::tick()` call (itself driven
+// by Choreographer via `native_dispatch_tick`, see below). `registry.view<T>().each()` is EnTT's
+// own standard structured-binding iteration idiom (confirmed against the real vendored
+// `entt.hpp`'s `each()`/`extended_storage_iterator`, not assumed) - not a Konative invention.
+void increment_heartbeat_counters(konative::ecs::Registry& registry, float /*delta_seconds*/) {
+    for (auto [entity, counter] : registry.view<HeartbeatCounter>().each()) {
+        ++counter.ticks;
+    }
+}
+
 // Resolves the "real open item, not yet decided" flagged by both include/konative/app/entry_point
 // .hpp and include/konative/app/detail/lifecycle_bridge.hpp's own doc comments: the C++ ECS/events
 // core (World/Registry/Dispatcher) has been buildable since the very first commit but was never
@@ -81,6 +101,19 @@ public:
                 "ARCHITECTURE.md section 9's flagged risk is real on this specific target - do not "
                 "build further architecture on Taskflow here without investigating first.");
         }
+
+        // Real ECS proof, the one piece Dispatcher/events + the tick driver + Taskflow above didn't
+        // cover: create real entities with a real component, register a real system the standard
+        // way. on_tick() below reports the real, live result every kTickLogInterval frames.
+        auto& registry = world().registry();
+        for (int i = 0; i < kHeartbeatEntityCount; ++i) {
+            registry.emplace<HeartbeatCounter>(registry.create());
+        }
+        world().systems().add(&increment_heartbeat_counters);
+        konative::core::log_info(
+            "KonativeAndroidApp: {} real ECS entities created (each with a HeartbeatCounter "
+            "component), one real system registered to increment them every tick.",
+            kHeartbeatEntityCount);
     }
     void on_resumed() override { konative::core::log_info("KonativeAndroidApp: on_resumed"); }
     void on_paused() override { konative::core::log_info("KonativeAndroidApp: on_paused"); }
@@ -95,9 +128,22 @@ public:
     void on_tick(float delta_seconds) override {
         ++tick_count_;
         if (tick_count_ % kTickLogInterval == 0) {
+            // world_.tick() (called before on_tick(), see Application::tick()) already ran
+            // increment_heartbeat_counters this frame - reading the view here proves the real
+            // Registry/View/System pipeline is genuinely operating, not just that emplace() didn't
+            // throw at startup: entity_count should read kHeartbeatEntityCount exactly, and
+            // total_heartbeat_ticks should read kHeartbeatEntityCount*tick_count_ exactly (every
+            // entity incremented once per tick, every tick, since on_started()).
+            std::uint64_t total_heartbeat_ticks = 0;
+            std::size_t entity_count = 0;
+            for (auto [entity, counter] : world().registry().view<HeartbeatCounter>().each()) {
+                total_heartbeat_ticks += counter.ticks;
+                ++entity_count;
+            }
             konative::core::log_info(
-                "KonativeAndroidApp: on_tick - {} real frames delivered so far (last delta {:.4f}s)",
-                tick_count_, delta_seconds);
+                "KonativeAndroidApp: on_tick - {} real frames delivered so far (last delta {:.4f}s); "
+                "real ECS proof: {} entities, {} combined HeartbeatCounter ticks",
+                tick_count_, delta_seconds, entity_count, total_heartbeat_ticks);
         }
     }
 
@@ -109,6 +155,7 @@ public:
 
 private:
     static constexpr std::uint64_t kTickLogInterval = 120; // ~1-2s of real frames on typical hardware
+    static constexpr int kHeartbeatEntityCount = 3;
     std::uint64_t tick_count_ = 0;
 };
 
