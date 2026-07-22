@@ -26,6 +26,18 @@
 // library fails to build for Android regardless of which headers this file uses. See
 // include/konative/events/CMakeLists.txt's comment (libcoro is only linked `if(NOT ANDROID)`) and
 // ARCHITECTURE.md section 9 for the full writeup.
+//
+// CLANG-VERIFIED, GCC-UNVERIFIED (a third real libcoro finding, from this project's first real CI
+// run, 2026-07-22): a test that awaits next() for an Event with a real data field (not an empty
+// struct) and captures the returned value - i.e. the actual core purpose of this class, not an
+// edge case - segfaults on GCC/Linux, while the exact same nested-coroutine-composition pattern
+// with an EMPTY event type (discarding next()'s return value entirely) does not crash. This points
+// at libcoro's task<T>::promise::return_value()/result() value-storage path specifically (task.hpp
+// lines ~74-197), not at the coroutine control flow generally, but was not root-caused further -
+// that would need a real GCC toolchain to iterate against, out of scope for a desktop-only spike.
+// tests/test_next_event_awaiter.cpp is Clang-only (`#if defined(__clang__)`) until this is
+// understood; treat any real, non-empty-payload use of NextEventAwaiter on GCC as unverified and
+// possibly unsafe, not just "probably fine."
 namespace konative::events {
 
 template <typename Event>
