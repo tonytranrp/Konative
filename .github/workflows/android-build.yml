@@ -89,12 +89,22 @@ jobs:
         # KonativeEmbedKotlinDex.cmake derives KONATIVE_COMPOSE_PLUGIN/KONATIVE_KOTLIN_STDLIB_JAR
         # from KONATIVE_KOTLINC's own directory (<bin-dir>/../lib/*.jar) with a real existence
         # check + FATAL_ERROR if missing - only KONATIVE_KOTLINC itself needs setting here.
-        run: |
-          curl -fsSL -o kotlin-compiler.zip "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
-          curl -fsSL -o kotlin-compiler.zip.sha256 "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip.sha256"
-          echo "$(cat kotlin-compiler.zip.sha256)  kotlin-compiler.zip" | sha256sum -c -
-          unzip -q kotlin-compiler.zip
-          echo "KONATIVE_KOTLINC=$PWD/kotlinc/bin/kotlinc" >> "$GITHUB_ENV"
+        # Wrapped in nick-fields/retry (a real, verified-current action, not a guess) - a real gap
+        # found by a self-audit (2026-07-22): neither this download nor the Gradle resolve step
+        # below had any resilience against a transient network blip against GitHub's release CDN -
+        # a single flaky moment would fail the whole ~30min job outright with a raw curl/sha256sum
+        # error, needing a human to notice and manually re-run.
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            curl -fsSL -o kotlin-compiler.zip "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
+            curl -fsSL -o kotlin-compiler.zip.sha256 "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip.sha256"
+            echo "$(cat kotlin-compiler.zip.sha256)  kotlin-compiler.zip" | sha256sum -c -
+            unzip -q kotlin-compiler.zip
+            echo "KONATIVE_KOTLINC=$PWD/kotlinc/bin/kotlinc" >> "$GITHUB_ENV"
 
       - name: Cache CPM dependency sources
         uses: actions/cache@v4
@@ -108,10 +118,20 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
 
       - name: Resolve the Kotlin/AndroidX classpath (tools/kotlin-classpath-resolver/)
-        working-directory: tools/kotlin-classpath-resolver
-        run: |
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
-          ./gradlew resolveKonativeClasspath --no-daemon
+        # Retry-wrapped for the same real reason as the kotlinc download above - this step does
+        # real Maven dependency resolution against google()/mavenCentral(), a second genuine
+        # network-dependent point of failure. nick-fields/retry has no working-directory input of
+        # its own (checked directly against its real action.yml), so the cd happens inside the
+        # command string instead of the usual step-level key.
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            cd tools/kotlin-classpath-resolver
+            echo "sdk.dir=$ANDROID_HOME" > local.properties
+            ./gradlew resolveKonativeClasspath --no-daemon
 
       - name: Configure (${{ matrix.preset }})
         # KONATIVE_ANDROID_JAR/KONATIVE_AAPT2 pinned explicitly (see the env block's own comment) -
