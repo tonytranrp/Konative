@@ -702,12 +702,18 @@ been combined before by anyone found in this research.
   a full real `./gradlew assembleDebug` build the app cleanly, installed and ran correctly on the
   physical phone (`R3GL10AHL7P`) with no regression to any previously-shipped feature.
 
+**Confirmed by repeated real-world evidence, moved here from "verify once on-device" below:**
+- **`onActivityCreated` firing for exactly the right `Activity` instance, exactly once per
+  process.** Structurally guaranteed by JLS class-init ordering (§6.4), not by an Android-internals
+  citation pinned to an exact source line — this project's own verify-empirically ethos asked for
+  "verify once on-device," but by 2026-07-22 every single feature landed since (lifecycle dispatch,
+  the tick heartbeat, touch input, window events, and 5 separate startup self-checks all running
+  inside `on_started()`) depends on exactly this guarantee, and has been re-confirmed by it, dozens
+  of times over across real app launches — never once a duplicate `on_started()` sequence, a
+  wrong-instance anomaly, or a self-check running twice. Evidence, not assumption, closes this now.
+
 **Architecturally sound synthesis, partially de-risked by real prior art, still not fully
 validated — prototype first:**
-- **`onActivityCreated` firing for exactly the right `Activity` instance** is structurally
-  guaranteed by JLS class-init ordering (§6.4), not by an Android-internals citation that could be
-  pinned to an exact source line — treat as "verify once on-device," matching this project's own
-  verify-empirically ethos, not an assumption to build further architecture on unverified.
 - `entt::meta` combined with Boost.PFR for auto-registration, or with Glaze for
   reflection-driven JSON serialization (both philosophically clean, neither found done anywhere).
 
