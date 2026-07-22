@@ -28,8 +28,15 @@ jobs:
       - name: Configure (desktop-debug preset)
         run: cmake --preset desktop-debug
 
-      - name: Build konative_tests
-        run: cmake --build build/desktop-debug --target konative_tests
+      - name: Build everything desktop-debug configures (tests + examples)
+        # No --target: the default build covers konative_tests AND examples/minimal_triangle
+        # (KONATIVE_BUILD_EXAMPLES defaults on for a top-level configure) - examples/README.md's own
+        # Hard Rule says examples must build on desktop specifically to be "a fast, CI-friendly smoke
+        # test," which a --target konative_tests-only build was silently not actually providing.
+        run: cmake --build build/desktop-debug
 
       - name: Run the desktop test suite
         run: ./build/desktop-debug/tests/konative_tests
+
+      - name: Run the minimal_triangle example (smoke test - it should just start/tick/destroy cleanly)
+        run: ./build/desktop-debug/examples/minimal_triangle/konative_minimal_triangle
