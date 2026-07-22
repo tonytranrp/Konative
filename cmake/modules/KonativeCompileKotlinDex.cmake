@@ -202,11 +202,20 @@ file(WRITE "${_aapt2_manifest}" "<manifest xmlns:android=\"http://schemas.androi
 # paths happen to collide that way. Anchoring to the parent directory's full name removes that
 # ambiguity entirely - it either matches the real platforms/android-<N>/ convention exactly, or
 # fails loudly.
+# "android-<N>" is the common case, but a real preview/extension SDK platform directory can be
+# named "android-<N>.<M>" instead (found via this project's first real Linux CI run, 2026-07-22:
+# a hosted runner's pre-installed SDK offered "android-37.1" as its newest platform, and
+# auto-discovery's natural-sort correctly picked it as "newest" - see
+# KonativeEmbedKotlinDex.cmake). The regex accepts an optional ".<M>" suffix but only ever captures
+# the leading integer - that's the real target API level aapt2's --target-sdk-version expects, and
+# it's self-consistent with KONATIVE_ANDROID_JAR itself (the same android.jar backs both the
+# directory name and whatever major API level it actually declares); the ".<M>" portion is treated
+# as a sub-revision, not a distinct platform.
 get_filename_component(_aapt2_android_jar_dir "${KONATIVE_ANDROID_JAR}" DIRECTORY)
 get_filename_component(_aapt2_android_platform_dir "${_aapt2_android_jar_dir}" NAME)
-string(REGEX MATCH "^android-([0-9]+)$" _aapt2_api_match "${_aapt2_android_platform_dir}")
+string(REGEX MATCH "^android-([0-9]+)(\\.[0-9]+)?$" _aapt2_api_match "${_aapt2_android_platform_dir}")
 if(NOT CMAKE_MATCH_1)
-  message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: could not determine a target API level - KONATIVE_ANDROID_JAR's immediate parent directory (${_aapt2_android_platform_dir}) is not of the form android-<N> - expected a .../platforms/android-<N>/android.jar path (KONATIVE_ANDROID_JAR=${KONATIVE_ANDROID_JAR})")
+  message(FATAL_ERROR "KonativeCompileKotlinDex.cmake: could not determine a target API level - KONATIVE_ANDROID_JAR's immediate parent directory (${_aapt2_android_platform_dir}) is not of the form android-<N> or android-<N>.<M> - expected a .../platforms/android-<N>[.<M>]/android.jar path (KONATIVE_ANDROID_JAR=${KONATIVE_ANDROID_JAR})")
 endif()
 set(_aapt2_target_api "${CMAKE_MATCH_1}")
 

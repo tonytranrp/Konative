@@ -40,6 +40,18 @@ jobs:
       # point release (verified: dl.google.com/.../android-ndk-r28c-linux.zip is a real 200; r28a
       # was never published, a real 404 - Google's own naming skipped straight to r28b).
       NDK_VERSION: "r28c"
+      # Pinned explicitly and passed straight through to the Configure step below (KONATIVE_ANDROID_JAR/
+      # KONATIVE_AAPT2), rather than leaving KonativeEmbedKotlinDex.cmake's own $ANDROID_HOME-based
+      # auto-discovery to pick "whatever's newest on the runner" - a real, previously-latent bug found
+      # this way (2026-07-22): the runner's own pre-installed SDK offers a newer "android-37.1"
+      # platform auto-discovery correctly ranks above "36" by natural sort, but
+      # KonativeCompileKotlinDex.cmake's target-API-level parser didn't yet handle a non-integer
+      # platform suffix (fixed separately) - and more generally, a CI gate's whole job is being a
+      # deterministic, reproducible check, which "whatever the runner happens to also have installed
+      # today" works against. Auto-discovery itself stays as-is for local dev, where "pick the newest
+      # on this machine" is exactly the right, low-friction behavior.
+      SDK_PLATFORM: "36"
+      SDK_BUILD_TOOLS: "36.0.0"
     steps:
       - uses: actions/checkout@v4
 
@@ -58,7 +70,7 @@ jobs:
       - name: Set up Android SDK (platform 36, build-tools 36.0.0)
         uses: android-actions/setup-android@v4
         with:
-          packages: "platform-tools platforms;android-36 build-tools;36.0.0"
+          packages: "platform-tools platforms;android-${{ env.SDK_PLATFORM }} build-tools;${{ env.SDK_BUILD_TOOLS }}"
 
       - name: Set up Android NDK
         id: setup-ndk
@@ -102,9 +114,15 @@ jobs:
           ./gradlew resolveKonativeClasspath --no-daemon
 
       - name: Configure (${{ matrix.preset }})
+        # KONATIVE_ANDROID_JAR/KONATIVE_AAPT2 pinned explicitly (see the env block's own comment) -
+        # KONATIVE_R8/KONATIVE_JAVAC still left to auto-discovery, since neither hit any real issue
+        # here and their exact install-directory naming (e.g. cmdline-tools/20.0/) isn't controlled
+        # by the packages: input above the way platforms;/build-tools; are.
         run: |
           cmake --preset ${{ matrix.preset }} \
             -DKONATIVE_KOTLINC="$KONATIVE_KOTLINC" \
+            -DKONATIVE_ANDROID_JAR="$ANDROID_HOME/platforms/android-$SDK_PLATFORM/android.jar" \
+            -DKONATIVE_AAPT2="$ANDROID_HOME/build-tools/$SDK_BUILD_TOOLS/aapt2" \
             -DKONATIVE_KOTLIN_CLASSPATH_DIR="$GITHUB_WORKSPACE/tools/kotlin-classpath-resolver/resolved-output/kotlin-classpath" \
             -DKONATIVE_AAPT2_AAR_DIR="$GITHUB_WORKSPACE/tools/kotlin-classpath-resolver/resolved-output/aapt2-aars"
 
