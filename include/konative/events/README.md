@@ -6,8 +6,8 @@ Every event type Konative dispatches, plus the one shared `entt::dispatcher` wra
 ## Hard rules — read before adding ANY event
 
 - **One event type, one file. No exceptions, ever.** A new event always means a new `.hpp` file
-  in the right feature-area subfolder (`lifecycle/`, `window/`, `input/`, or a new subfolder if the
-  event doesn't fit an existing category). Never add a second `struct ...Event { ... };` to an
+  in the right feature-area subfolder (`lifecycle/`, `window/`, `input/`, `persistence/`, or a new
+  subfolder if the event doesn't fit an existing category). Never add a second `struct ...Event { ... };` to an
   existing header, even if it seems trivially related to what's already there — this is the single
   rule this folder exists to enforce (`ARCHITECTURE.md` §2), and it's a deliberately *stricter*
   rule than either of this project's own inspirations (GameHub's `libs/events/` batches all event
