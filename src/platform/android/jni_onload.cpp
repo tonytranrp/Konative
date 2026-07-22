@@ -332,6 +332,31 @@ public:
     // below) and this read both happen on the Activity's main/UI thread only.
     [[nodiscard]] std::uint64_t touch_event_count() const { return touch_event_count_; }
 
+    // Real, public dispatch methods for the JNI trampolines below to call, instead of reaching into
+    // world().events().trigger() directly from a free function - app/README.md's own Hard Rule
+    // ("Application's on_* methods are the only extension point... does not reach into
+    // World/Registry from outside an Application subclass") named this exact shape as disallowed;
+    // these keep World genuinely encapsulated, the same way native_dispatch_lifecycle_event already
+    // only ever calls app.start()/resume()/pause()/destroy(), never world() directly. JNI native
+    // methods must be free functions with an exact JNICALL signature (RegisterNatives' own
+    // requirement) - they can never themselves be KonativeAndroidApp members, so this thin
+    // dispatch_*() layer is the real, necessary seam, not a formality.
+    void dispatch_touch_down(std::int32_t pointer_id, float x, float y) {
+        world().events().trigger(konative::events::input::TouchDownEvent{pointer_id, x, y});
+    }
+    void dispatch_touch_move(std::int32_t pointer_id, float x, float y) {
+        world().events().trigger(konative::events::input::TouchMoveEvent{pointer_id, x, y});
+    }
+    void dispatch_touch_up(std::int32_t pointer_id, float x, float y) {
+        world().events().trigger(konative::events::input::TouchUpEvent{pointer_id, x, y});
+    }
+    void dispatch_window_resized(std::int32_t width, std::int32_t height) {
+        world().events().trigger(konative::events::window::WindowResizedEvent{width, height});
+    }
+    void dispatch_window_focus_changed(bool has_focus) {
+        world().events().trigger(konative::events::window::WindowFocusChangedEvent{has_focus});
+    }
+
 private:
     // Logs every occurrence, unlike on_tick()'s periodic summary above - real touches are
     // discrete/user-paced (nowhere near 60-120Hz), so there's no flood risk, and seeing every one
@@ -459,16 +484,13 @@ jlong JNICALL native_get_tick_count(JNIEnv*, jclass) {
 // Modifier.pointerInput block calling these and World::tick()'s own Dispatcher::update() both run on
 // the same Activity main/UI thread - no cross-thread concern, no reason to defer a frame.
 void JNICALL native_dispatch_touch_down(JNIEnv*, jclass, jint pointer_id, jfloat x, jfloat y) {
-    android_app().world().events().trigger(
-        konative::events::input::TouchDownEvent{static_cast<std::int32_t>(pointer_id), x, y});
+    android_app().dispatch_touch_down(static_cast<std::int32_t>(pointer_id), x, y);
 }
 void JNICALL native_dispatch_touch_move(JNIEnv*, jclass, jint pointer_id, jfloat x, jfloat y) {
-    android_app().world().events().trigger(
-        konative::events::input::TouchMoveEvent{static_cast<std::int32_t>(pointer_id), x, y});
+    android_app().dispatch_touch_move(static_cast<std::int32_t>(pointer_id), x, y);
 }
 void JNICALL native_dispatch_touch_up(JNIEnv*, jclass, jint pointer_id, jfloat x, jfloat y) {
-    android_app().world().events().trigger(
-        konative::events::input::TouchUpEvent{static_cast<std::int32_t>(pointer_id), x, y});
+    android_app().dispatch_touch_up(static_cast<std::int32_t>(pointer_id), x, y);
 }
 
 // Bound to KonativeEntryPoint.nativeGetTouchCount() - same "let real Compose UI show real C++-side
@@ -480,15 +502,14 @@ jlong JNICALL native_get_touch_count(JNIEnv*, jclass) {
 // Bound to KonativeEntryPoint.nativeDispatchWindowResized(Int, Int) - real producer is
 // KonativeRootComposable's Modifier.onSizeChanged, see KonativeAndroidApp::on_started()'s comment.
 void JNICALL native_dispatch_window_resized(JNIEnv*, jclass, jint width, jint height) {
-    android_app().world().events().trigger(konative::events::window::WindowResizedEvent{
-        static_cast<std::int32_t>(width), static_cast<std::int32_t>(height)});
+    android_app().dispatch_window_resized(static_cast<std::int32_t>(width),
+                                           static_cast<std::int32_t>(height));
 }
 
 // Bound to KonativeEntryPoint.nativeDispatchWindowFocusChanged(Boolean) - real producer is
 // KonativeRootComposable reading LocalWindowInfo.current.isWindowFocused inside a LaunchedEffect.
 void JNICALL native_dispatch_window_focus_changed(JNIEnv*, jclass, jboolean has_focus) {
-    android_app().world().events().trigger(
-        konative::events::window::WindowFocusChangedEvent{has_focus == JNI_TRUE});
+    android_app().dispatch_window_focus_changed(has_focus == JNI_TRUE);
 }
 
 } // namespace

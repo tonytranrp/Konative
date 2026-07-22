@@ -9,7 +9,9 @@ across the rest of the codebase.
 - **Zero dependencies on any other `konative::*` module.** `core/` sits at the bottom of the
   dependency graph — if a header here needs to `#include "konative/ecs/..."` or
   `"konative/events/..."`, that logic belongs in a higher module, not here. The only third-party
-  dependency `core/` may link is `fmt` (for `log.hpp`).
+  dependencies `core/` may link are `fmt` and `spdlog` (both for `log.hpp` — spdlog's
+  `android_logger_mt()`/stdout color sinks are the real logging backend, fmt is its formatting
+  layer; both are load-bearing, not just fmt).
 - **No platform-specific code beyond `detail/platform.hpp`'s compile-time detection macros.**
   Anything that needs `#ifdef __ANDROID__` branching belongs in `platform/android/`, not `core/`.
 - **`Result<T,E>`, not exceptions, at any boundary that might cross the Kotlin/Native interop

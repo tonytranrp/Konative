@@ -20,15 +20,15 @@ entry-point contract every Konative app implements exactly once.
   override doesn't need it.
 - **This module must not depend on `platform/android/` or `render/`.** `Application` is
   platform-agnostic on purpose. A desktop test harness (or a future second platform) should be able
-  to drive an `Application` without linking any Android-specific code at all.
-  **Current status, honestly**: `src/platform/android/jni_onload.cpp` (the real `JNI_OnLoad` entry
-  point, `ARCHITECTURE.md` section 6.4) does not depend on `app/` at all right now — the earlier
-  `android_native_app_glue` design that DID call into `app/`'s `entry_point.hpp`/
-  `detail/lifecycle_bridge.hpp` was deleted (commit `3618fb5`), and the new `JNI_OnLoad`-based
-  design's relationship to this module's `Application`/ECS lifecycle is a real open item, not yet
-  decided — see `entry_point.hpp`/`detail/lifecycle_bridge.hpp`'s own comments. The one-way
-  dependency rule above still holds (this module still must never depend the other way), it's just
-  that nothing currently depends on this module from the Android platform side either.
+  to drive an `Application` without linking any Android-specific code at all. This is a strictly
+  one-way rule — the DEPENDENCY DIRECTION only ever runs from `platform/android/` toward `app/`,
+  never the reverse: **`src/platform/android/jni_onload.cpp` DOES depend on `app/` for real**, since
+  2026-07-21 — its `KonativeAndroidApp` is the one real `create_application()` implementation for
+  that target (`entry_point.hpp`'s own contract), and `KonativeEntryPoint.kt`'s
+  `ActivityLifecycleCallbacks`/`Choreographer.FrameCallback` call back into it via `RegisterNatives`.
+  That's `app/` being DEPENDED ON, which this Hard Rule was never about forbidding — only `app/`
+  itself `#include`-ing anything under `platform/android/`/`render/` would violate it, and that
+  still doesn't happen anywhere.
 
 ## Adding to this folder
 

@@ -17,10 +17,11 @@ Every event type Konative dispatches, plus the one shared `entt::dispatcher` wra
   Every event must satisfy `konative::core::EventType`
   (`core/type_traits.hpp`) — if a "clever" event needs a constructor or inheritance, it's not an
   event, it's something else.
-- **`dispatcher.hpp` is the ONLY file in this folder that isn't an event type.** It must never
-  grow event-specific logic (no per-event-type special cases inside the dispatcher wrapper) — new
-  behavior that's specific to one event type belongs in whatever system consumes that event, not
-  in the shared dispatcher.
+- **`dispatcher.hpp` is the shared event-bus wrapper, not an event type itself** (like
+  `next_event_awaiter.hpp`/`next_event_awaiter_self_check.hpp`, ARCHITECTURE.md §9's libcoro spike,
+  also generic machinery rather than event types). None of these must ever grow event-specific
+  logic (no per-event-type special cases inside them) — new behavior that's specific to one event
+  type belongs in whatever system consumes that event, not in shared machinery here.
 - **Naming**: `PascalCaseNoun` + `Event` suffix matching the struct name exactly
   (`WindowResizedEvent.hpp` for `struct WindowResizedEvent`) — this mirrors Hazel's own filename
   convention even though Hazel doesn't follow the one-per-file rule strictly; Konative's stricter

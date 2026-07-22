@@ -53,13 +53,11 @@ CPMAddPackage(
   # setting it links spdlog against fmt::fmt-header-only instead of fmt::fmt. Do not "fix" this back
   # to SPDLOG_FMT_EXTERNAL without re-reading this comment and ARCHITECTURE.md section 4 first.
   #
-  # Real, still-open item this DOES surface: include/konative/core/CMakeLists.txt links fmt::fmt
-  # (compiled) for konative_core's own log.hpp, which is a different fmt target than the
-  # fmt::fmt-header-only this option makes spdlog use internally. Both currently coexist fine only
-  # because nothing yet links konative_core and spdlog together in the same binary (log.hpp's own
-  # comment: spdlog's android_logger_mt() sink is an explicit not-yet-done TODO). Resolve which fmt
-  # target konative_core should use for consistency WHEN that sink actually gets wired up, not
-  # speculatively now.
+  # RESOLVED (this comment used to flag it as a real, still-open item - stale since
+  # include/konative/core/CMakeLists.txt's own comment says so directly): konative_core links
+  # fmt::fmt-header-only (not fmt::fmt compiled) for the same reason, avoiding two different fmt
+  # build modes in the same binary now that log.hpp does link spdlog::spdlog_header_only for real
+  # (android_logger_mt()/stdout_color_sinks, not a TODO anymore).
   OPTIONS "SPDLOG_FMT_EXTERNAL_HO ON"
 )
 

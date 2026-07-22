@@ -95,8 +95,15 @@ Hit with `libcoro` specifically: v0.14.1's own `CMakeLists.txt` had a genuine up
 between two file paths, parsed as its own list entry, so `add_library` fails looking for a source
 file literally named `/`), and separately its `vendor/c-ares/c-ares` submodule (needed only for
 `LIBCORO_FEATURE_NETWORKING`, which this repo has off) hit a git-update failure on this machine.
-Fixed by bumping to `v0.16.0` (typo fixed upstream) and passing `GIT_SUBMODULES ""` to skip the
-unneeded submodule entirely. If you hit an upstream bug like this in some other CPM dependency:
+Fixed by bumping to `v0.16.0` (typo fixed upstream). The submodule git-update failure itself was
+actually fixed by the `-DGIT_EXECUTABLE` workaround above (it's a general git-invocation fix, not
+specific to this dependency) — **not** by also passing `GIT_SUBMODULES ""`, despite that flag being
+present on this exact `CPMAddPackage()` call: CMake's CMP0097 policy defaults to `OLD` here (never
+set to `NEW` anywhere in this repo), under which an empty `GIT_SUBMODULES` string means "unset," not
+"fetch none" — the ~559-file `c-ares` submodule is still checked out in full regardless of that
+flag. It's harmless (unused, just wasted clone time/disk), left in place as a statement of intent
+rather than removed — see `cmake/modules/KonativeDependencies.cmake`'s own comment on this exact
+line for the full correction. If you hit an upstream bug like this in some other CPM dependency:
 check for a newer tag first; only reach for CPM's `PATCHES` option if no fixed release exists yet.
 
 ### A CPM `GIT_TAG` doesn't exist at all
