@@ -643,6 +643,19 @@ been combined before by anyone found in this research.
   exact chain is what every feature landed on 2026-07-21 — lifecycle dispatch, the tick heartbeat,
   the cross-thread queue, the Taskflow self-check — builds directly on top of and depends on
   working correctly, each one independently re-confirming it does).
+- **Embedded blob size with Compose's full dependency graph in the dex** — measured for real
+  (2026-07-21) against the actual current build, replacing `research/research.md` §8's stale,
+  pre-Compose-pivot "~2.5MB for a near-trivial Kotlin object" guess: the real `classes.dex` is
+  **2,411,952 bytes** (≈2.30 MiB) and the sibling `resources.arsc` blob is **145,516 bytes**
+  (≈142 KiB) — combined, ≈2.44 MiB of embedded blob data, for the full real dependency graph
+  (Compose runtime/ui/foundation, activity, lifecycle-runtime/viewmodel, savedstate,
+  kotlinx-coroutines-android, kotlin-stdlib). Contrary to this section's own prior "almost
+  certainly undercounts" speculation, the real number lands in almost exactly the same ballpark as
+  the old pre-Compose guess — R8's shrinking (still active despite `-dontoptimize`, which disables
+  optimization passes, not dead-code elimination) is doing real, effective work keeping this small.
+  For context, not itself part of the embedded-blob question: the real per-ABI stripped `.so` is
+  ≈4.7–4.8 MB (arm64-v8a/x86_64), and the full debug universal APK (both ABIs, unstripped
+  intermediate copies never included) is 13,228,309 bytes (≈12.6 MB).
 - **Taskflow's real thread-spawning/scheduling machinery on Android NDK arm64-v8a** — moved here
   from the unproven list below after `konative::scheduling::run_taskflow_self_check()`
   (`include/konative/scheduling/taskflow_self_check.hpp`) actually ran, for real, on the physical
@@ -654,10 +667,6 @@ been combined before by anyone found in this research.
 
 **Architecturally sound synthesis, partially de-risked by real prior art, still not fully
 validated — prototype first:**
-- **Embedded blob size once Compose's own dependency graph is in the dex** — genuinely unmeasured
-  (§6.6); `research/research.md` §8's "~2.5MB for a near-trivial Kotlin object" figure predates the
-  Compose pivot and almost certainly undercounts once `compose-runtime`/`compose-ui`/
-  `lifecycle`/`savedstate` are on the classpath too.
 - **`onActivityCreated` firing for exactly the right `Activity` instance** is structurally
   guaranteed by JLS class-init ordering (§6.4), not by an Android-internals citation that could be
   pinned to an exact source line — treat as "verify once on-device," matching this project's own
@@ -668,12 +677,13 @@ validated — prototype first:**
 
 Treat the second list as the actual R&D risk of this project. Everything in the first list is
 "assemble known-good pieces"; everything in the second list needs a real spike/prototype before
-committing further architecture on top of an assumption that it works. **The very first
-end-to-end milestone for this framework should be: get a trivial Compose UI (a single solid-color
-`Box` or equivalent) to actually render as `MainActivity`'s content view on the connected test
-device, driven entirely by `JNI_OnLoad`** — that one milestone proves the dex-loading mechanism,
-the `Application`→`Activity` handoff, and Kotlin-owns-Compose all at once, the direct analog of the
-old Kotlin/Native milestone this replaces.
+committing further architecture on top of an assumption that it works. **The very first end-to-end
+milestone for this framework was exactly this: get a trivial Compose UI (a solid-color `Box`, real
+`BasicText` — see §6.6/§6.7) to actually render as `MainActivity`'s content view on a connected test
+device, driven entirely by `JNI_OnLoad`** — achieved and repeatedly re-verified on real hardware
+long before this rewrite, proving the dex-loading mechanism, the `Application`→`Activity` handoff,
+and Kotlin-owns-Compose all at once, the direct analog of the old Kotlin/Native milestone it
+replaced. Kept here as a record of what that first milestone was, not as a still-pending goal.
 
 Kotlin/Native itself (static-lib linking into an NDK CMake C++ target via `-produce static` +
 `@CName`, and its real documented linking friction — JetBrains issue kotlin-native#2803, Tier-3
