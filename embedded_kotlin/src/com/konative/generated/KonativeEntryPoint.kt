@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.os.Bundle
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -48,6 +49,7 @@ object KonativeEntryPoint {
                 if (owner != null) return // only the first Activity matters for this entry point
                 owner = ComposeHostOwner().apply { performRestore(savedInstanceState) }
                 owner!!.registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+                dispatchToNative(AndroidLifecycleEvent.STARTED)
 
                 val composeContext = installResourcesAndGetComposeContext(activity, resourcesArscBuffer)
 
@@ -66,10 +68,12 @@ object KonativeEntryPoint {
 
             override fun onActivityResumed(activity: Activity) {
                 owner?.registry?.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+                dispatchToNative(AndroidLifecycleEvent.RESUMED)
             }
 
             override fun onActivityPaused(activity: Activity) {
                 owner?.registry?.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+                dispatchToNative(AndroidLifecycleEvent.PAUSED)
             }
 
             override fun onActivityStopped(activity: Activity) {
@@ -82,8 +86,40 @@ object KonativeEntryPoint {
 
             override fun onActivityDestroyed(activity: Activity) {
                 owner?.registry?.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+                dispatchToNative(AndroidLifecycleEvent.DESTROYED)
             }
         })
+    }
+
+    // Native, JNI_OnLoad-bound counterpart to install()'s own JNI contract, but the opposite call
+    // direction (Kotlin -> native, not native -> Kotlin) - see jni_onload.cpp's own comment on
+    // RegisterNatives for the full design. Int encoding must stay in sync with jni_onload.cpp's
+    // AndroidLifecycleEvent enum exactly (see AndroidLifecycleEvent below).
+    @JvmStatic
+    external fun nativeDispatchLifecycle(event: Int)
+}
+
+// Mirrors jni_onload.cpp's own AndroidLifecycleEvent enum exactly - both sides must stay in sync.
+private object AndroidLifecycleEvent {
+    const val STARTED = 0
+    const val RESUMED = 1
+    const val PAUSED = 2
+    const val DESTROYED = 3
+}
+
+// Wraps every real nativeDispatchLifecycle() call site: if RegisterNatives ever failed to bind this
+// method (jni_onload.cpp's own JNI_OnLoad logs why, non-fatally, if so), an uncaught
+// UnsatisfiedLinkError here would crash the Activity's own onResume()/onPause()/onDestroy() -
+// breaking real Compose rendering over a C++-side feature that's supposed to degrade gracefully.
+// Logs once per occurrence rather than silently swallowing it, matching this codebase's own
+// "the self-check should report clearly, not silently swallow a failure" standing rule
+// (embedded_kotlin/README.md, core/log.hpp's own doc comment).
+private fun dispatchToNative(event: Int) {
+    try {
+        KonativeEntryPoint.nativeDispatchLifecycle(event)
+    } catch (e: UnsatisfiedLinkError) {
+        Log.e("Konative", "dispatchToNative: nativeDispatchLifecycle unavailable (event=$event) - " +
+            "the C++ ECS/events core will not see this transition; Compose is unaffected.", e)
     }
 }
 

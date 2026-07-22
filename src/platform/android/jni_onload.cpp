@@ -9,6 +9,8 @@
 
 #include <jni.h>
 
+#include "konative/app/application.hpp"
+#include "konative/app/entry_point.hpp"
 #include "konative/core/log.hpp"
 #include "konative/embed/checked_blob.hpp"
 #include "konative/jni/dex_loader.hpp"
@@ -34,7 +36,92 @@ namespace {
 
 constexpr const char* kEntryPointClass = "com.konative.generated.KonativeEntryPoint";
 
+// Resolves the "real open item, not yet decided" flagged by both include/konative/app/entry_point
+// .hpp and include/konative/app/detail/lifecycle_bridge.hpp's own doc comments: the C++ ECS/events
+// core (World/Registry/Dispatcher) has been buildable since the very first commit but was never
+// actually instantiated anywhere in the real, shipping app - only desktop tests/examples ever ran
+// it. KonativeEntryPoint.kt's own ActivityLifecycleCallbacks (already registered for Jetpack's
+// Lifecycle system, for Compose's own sake) now ALSO calls back into native code on each of the 4
+// transitions konative::app::Application models (see the RegisterNatives call below and
+// KonativeEntryPoint.kt's nativeDispatchLifecycle) - this class is the one real
+// konative::app::create_application() implementation for this target, "implemented by the
+// application author, exactly once per binary" per entry_point.hpp's own contract.
+//
+// Deliberately trivial (matches examples/minimal_triangle's own "prove the plumbing, not a real
+// app" scope, ARCHITECTURE.md section 2) - logs on each transition so this is independently
+// verifiable via logcat alone, the same self-checking ethos as every other mechanism in this
+// codebase. World::tick() is deliberately NOT driven by anything here - Compose (JVM-hosted, owns
+// its own frame scheduling) owns real rendering now, and there's no natural per-frame driver for
+// the C++ side in this design yet; a future continuous-tick driver (Choreographer, a dedicated
+// thread, ...) is a real, separate, NOT-yet-decided design question, left undriven on purpose here
+// rather than silently forgotten.
+class KonativeAndroidApp final : public konative::app::Application {
+public:
+    void on_started() override {
+        konative::core::log_info(
+            "KonativeAndroidApp: on_started (World constructed, first real Activity created)");
+    }
+    void on_resumed() override { konative::core::log_info("KonativeAndroidApp: on_resumed"); }
+    void on_paused() override { konative::core::log_info("KonativeAndroidApp: on_paused"); }
+    void on_destroyed() override { konative::core::log_info("KonativeAndroidApp: on_destroyed"); }
+};
+
+// Function-local static, same singleton-via-static pattern examples/minimal_triangle/main.cpp's
+// own create_application() already uses - constructed lazily on first call (JNI_OnLoad's own
+// RegisterNatives below never calls this directly; the first real call happens later, whenever the
+// embedded dex's first real Activity lifecycle event actually fires).
+konative::app::Application& android_app() {
+    static KonativeAndroidApp instance;
+    return instance;
+}
+
+// The 4 lifecycle transitions konative::app::Application models, in the exact int encoding
+// KonativeEntryPoint.kt's own nativeDispatchLifecycle(Int) contract expects - both sides must stay
+// in sync (same discipline as install()'s own signature contract below/in
+// embedded_kotlin/README.md's Hard Rule). No "stopped" id exists because konative::app::Application
+// itself has no separate stop() method (see application.hpp) - onActivityStopped stays scoped to
+// Jetpack's own Lifecycle system only, unchanged by this feature.
+enum class AndroidLifecycleEvent : jint {
+    kStarted = 0,
+    kResumed = 1,
+    kPaused = 2,
+    kDestroyed = 3,
+};
+
+// The real function RegisterNatives binds to KonativeEntryPoint.nativeDispatchLifecycle(Int) below
+// - called FROM Kotlin, the opposite direction from install() above, so (unlike install()) this
+// call site IS visible to R8's own static call graph and doesn't need a dedicated -keep rule for
+// shrinking; embedded_kotlin/r8-rules.pro still keeps native-method NAMES generically (the
+// standard Android idiom) as cheap insurance against a future re-enabled obfuscation pass.
+void JNICALL native_dispatch_lifecycle_event(JNIEnv*, jclass, jint event) {
+    auto& app = android_app();
+    switch (static_cast<AndroidLifecycleEvent>(event)) {
+        case AndroidLifecycleEvent::kStarted:
+            app.start();
+            return;
+        case AndroidLifecycleEvent::kResumed:
+            app.resume();
+            return;
+        case AndroidLifecycleEvent::kPaused:
+            app.pause();
+            return;
+        case AndroidLifecycleEvent::kDestroyed:
+            app.destroy();
+            return;
+    }
+    konative::core::log_error("native_dispatch_lifecycle_event: unknown event id {}",
+                               static_cast<int>(event));
+}
+
 } // namespace
+
+namespace konative::app {
+
+// The one real create_application() this binary defines (entry_point.hpp's own contract - exactly
+// once per binary, whatever platform glue is compiled in constructs/drives it).
+Application& create_application() { return android_app(); }
+
+} // namespace konative::app
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     JNIEnv* env = nullptr;
@@ -94,6 +181,30 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
                 "JNI_OnLoad: NewDirectByteBuffer(resources.arsc) failed - continuing without it.");
             resources_buffer = nullptr;
         }
+    }
+
+    // Step 5.6: bind Kotlin's nativeDispatchLifecycle(Int) to native_dispatch_lifecycle_event above
+    // - see KonativeAndroidApp's own comment for why. Deliberately non-fatal on failure, same as the
+    // resources.arsc blob above: this wires a real feature (the C++ ECS/events core actually
+    // running), but its absence doesn't prevent Compose from rendering - only degrades to the C++
+    // side never seeing lifecycle transitions. Must happen before install() below even though the
+    // very first real call can't arrive until later (an Activity lifecycle event firing is
+    // asynchronous, driven by the real Android framework afterward) - registering natives before
+    // handoff is simply the cleaner ordering, with no dependency on exactly when Kotlin's first
+    // callback fires.
+    JNINativeMethod lifecycle_native{
+        const_cast<char*>("nativeDispatchLifecycle"),
+        const_cast<char*>("(I)V"),
+        reinterpret_cast<void*>(&native_dispatch_lifecycle_event),
+    };
+    if (env->RegisterNatives(loaded.value().clazz.get(), &lifecycle_native, 1) != JNI_OK ||
+        konative::jni::check_and_clear_exception(env, "RegisterNatives(nativeDispatchLifecycle)")) {
+        konative::core::log_error(
+            "JNI_OnLoad: RegisterNatives(nativeDispatchLifecycle) failed - the C++ ECS/events core "
+            "will not receive real Activity lifecycle transitions this run. Compose rendering is "
+            "unaffected (this native method is unrelated to install()'s own handoff below); Kotlin's "
+            "own nativeDispatchLifecycle() call sites are individually try/caught for exactly this "
+            "case, see KonativeEntryPoint.kt.");
     }
 
     // Step 6: ONE handoff call, then native code is done - everything past this point (Compose

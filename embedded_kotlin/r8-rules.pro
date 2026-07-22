@@ -9,6 +9,22 @@
 # META-INF/com.android.tools/r8/*.pro and META-INF/proguard/*.pro inside the dependency jars
 # themselves - those are NOT duplicated here, R8 finds them automatically from its own inputs).
 
+# --- Generic Android idiom: keep the NAMES of any native (JNI) method, on any class, exactly as
+# declared. -dontobfuscate above already makes this a no-op for the CURRENT build (nothing gets
+# renamed at all), but native-method binding cares specifically about name preservation
+# (RegisterNatives/JNI's own Java_-prefixed static linking both bind by exact string name) in a way
+# unrelated to whether the REST of a method gets shrunk - this is cheap, standard insurance against
+# a future re-enabled obfuscation pass silently breaking KonativeEntryPoint.nativeDispatchLifecycle
+# (src/platform/android/jni_onload.cpp's RegisterNatives call), or any native method added later,
+# without needing a new rule for each one. Unlike install()'s rule below, this one method's shrinking
+# (as opposed to renaming) is already safe without a -keep, since its one real call site
+# (KonativeEntryPoint.kt's own dispatchToNative()) is ordinary Kotlin-to-Kotlin-declared-external
+# code R8's static call graph already sees - only the JNI-invisible direction (native calling INTO
+# Kotlin, like install() below) needs a full keep. ---
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+
 # --- Konative's own entry point - called only via JNI reflection (GetStaticMethodID +
 # CallStaticVoidMethod from src/platform/android/jni_onload.cpp), invisible to R8's static call
 # graph, so it must be kept explicitly or R8 treats it as dead code and strips it. Real, reproduced
