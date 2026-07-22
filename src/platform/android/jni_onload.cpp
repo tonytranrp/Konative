@@ -28,6 +28,7 @@
 #include "konative/jni/dex_loader.hpp"
 #include "konative/reflect/meta_registry.hpp"
 #include "konative/scheduling/cross_thread_event_queue.hpp"
+#include "konative/scheduling/spsc_event_queue_self_check.hpp"
 #include "konative/scheduling/taskflow_self_check.hpp"
 #include "konative/scheduling/thread_pool_self_check.hpp"
 
@@ -169,6 +170,27 @@ public:
                 "KonativeAndroidApp: BS::thread_pool self-check FAILED on this device/ABI - a real "
                 "parallel computation produced a wrong result. Nothing else in this app currently "
                 "depends on ThreadPool, but confirms a real problem on this specific target.");
+        }
+
+        // readerwriterqueue (SpscEventQueue) - the SPSC-optimized sibling concurrentqueue already
+        // has a real production consumer for (CrossThreadEventQueue), fetched via CPM since the
+        // first dependency pass but never linked/included anywhere until now (confirmed by
+        // repo-wide grep before landing this). Building this self-check caught a real bug: post()
+        // originally used try_enqueue() ("does not allocate memory" per its own doc comment),
+        // silently dropping every event past the default capacity of 15 - fixed to enqueue()
+        // (grows automatically), same "caller never worries about capacity" contract
+        // CrossThreadEventQueue already has.
+        bool spsc_ok = konative::scheduling::run_spsc_event_queue_self_check();
+        if (spsc_ok) {
+            konative::core::log_info(
+                "KonativeAndroidApp: SPSC event queue self-check PASSED on this device/ABI - real "
+                "single-producer-thread delivery confirmed lossless and in order.");
+        } else {
+            konative::core::log_error(
+                "KonativeAndroidApp: SPSC event queue self-check FAILED on this device/ABI - a real "
+                "single-producer-thread delivery lost events or delivered them out of order. "
+                "Nothing else in this app currently depends on this, but confirms a real problem on "
+                "this specific target.");
         }
 
         // EnTT snapshot + cereal - the "historically-documented snapshot-API pairing" the
