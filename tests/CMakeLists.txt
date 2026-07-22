@@ -10,6 +10,7 @@ add_executable(konative_tests
   test_taskflow_self_check.cpp
   test_next_event_awaiter.cpp
   test_registry_snapshot.cpp
+  test_thread_pool_self_check.cpp
 )
 target_link_libraries(konative_tests PRIVATE konative::konative doctest::doctest)
 konative_apply_warnings(konative_tests)

@@ -27,6 +27,7 @@
 #include "konative/reflect/meta_registry.hpp"
 #include "konative/scheduling/cross_thread_event_queue.hpp"
 #include "konative/scheduling/taskflow_self_check.hpp"
+#include "konative/scheduling/thread_pool_self_check.hpp"
 
 extern "C" {
 extern const unsigned char konative_app_dex_start[];
@@ -128,6 +129,27 @@ public:
                 "(nothing else in this app currently depends on Taskflow), but confirms "
                 "ARCHITECTURE.md section 9's flagged risk is real on this specific target - do not "
                 "build further architecture on Taskflow here without investigating first.");
+        }
+
+        // BS::thread_pool (ThreadPool) - the OTHER scheduler this stack picked, alongside Taskflow,
+        // specifically for "simple fire-and-wait-for-all parallelism" subsystems
+        // (scheduling/README.md's own Hard Rule) - had zero test coverage or real usage anywhere
+        // until now (confirmed by repo-wide grep before landing this). Building this self-check for
+        // the first time caught a REAL, previously-undetected bug in thread_pool.hpp itself
+        // (`using ThreadPool = BS::thread_pool<>;` doesn't compile - BS::thread_pool is a plain,
+        // non-template class in the pinned v4.1.0 tag - fixed alongside this self-check), since
+        // nothing had ever actually included/compiled that header before. Same permanent
+        // regression-guard-at-real-startup pattern as the Taskflow self-check above.
+        bool thread_pool_ok = konative::scheduling::run_thread_pool_self_check();
+        if (thread_pool_ok) {
+            konative::core::log_info(
+                "KonativeAndroidApp: BS::thread_pool self-check PASSED on this device/ABI - real "
+                "fire-and-wait-for-all parallelism confirmed correct.");
+        } else {
+            konative::core::log_error(
+                "KonativeAndroidApp: BS::thread_pool self-check FAILED on this device/ABI - a real "
+                "parallel computation produced a wrong result. Nothing else in this app currently "
+                "depends on ThreadPool, but confirms a real problem on this specific target.");
         }
 
         // EnTT snapshot + cereal - the "historically-documented snapshot-API pairing" the
