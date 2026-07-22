@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.util.Log
 import android.view.Choreographer
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,10 +17,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.changedToDown
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
@@ -152,6 +159,13 @@ object KonativeEntryPoint {
     external fun nativeDispatchWindowResized(width: Int, height: Int)
     @JvmStatic
     external fun nativeDispatchWindowFocusChanged(hasFocus: Boolean)
+
+    // Same RegisterNatives contract, bound to native_dispatch_key_event - the last unwired
+    // events/input/ type (jni_onload.cpp's own on_started() comment has the full writeup: real
+    // hardware key presses, volume up/down specifically since they exist on every real device).
+    // Real producer: KonativeRootComposable's Modifier.onKeyEvent.
+    @JvmStatic
+    external fun nativeDispatchKeyEvent(keyCode: Int, isDown: Boolean)
 }
 
 // Backs KonativeRootComposable's live tick-count display - a plain, object-scoped
@@ -318,6 +332,16 @@ private fun dispatchWindowFocusChangedToNative(hasFocus: Boolean) {
     }
 }
 
+// Same try/catch-wrapped shape, driven by KonativeRootComposable's Modifier.onKeyEvent.
+private fun dispatchKeyEventToNative(keyCode: Int, isDown: Boolean) {
+    try {
+        KonativeEntryPoint.nativeDispatchKeyEvent(keyCode, isDown)
+    } catch (e: UnsatisfiedLinkError) {
+        Log.e("Konative", "dispatchKeyEventToNative: nativeDispatchKeyEvent unavailable - the C++ " +
+            "ECS/events core will not see this key event; Compose rendering is unaffected.", e)
+    }
+}
+
 // Selects between the two real resources.arsc mechanisms (see embedded_kotlin/README.md's Update
 // sections for the full writeup of both): the general, API-30+ ResourcesLoader mechanism
 // (KonativeResourcesLoader.kt) if it installs successfully - which mutates the real Activity's own
@@ -380,17 +404,48 @@ private class ComposeHostOwner : LifecycleOwner, ViewModelStoreOwner, SavedState
 // needing to subclass ComposeView (which is `final` - confirmed via javap before attempting this;
 // View.onWindowFocusChanged()/ViewTreeObserver would have been the fallback had LocalWindowInfo not
 // existed in this vendored Compose version).
+//
+// KeyEvent's real producer: Modifier.onKeyEvent, which (unlike pointer input) is FOCUS-based, not
+// position-based - the root Box must be made focusable (Modifier.focusable()) and actually hold
+// focus, so a FocusRequester + a one-shot LaunchedEffect(Unit) { requestFocus() } grabs it on first
+// composition (there's no visible click-to-focus affordance in this trivial UI to do it
+// implicitly). Observes volume up/down specifically - real hardware keys present on every real
+// Android device, unlike relying on a soft-keyboard/text-field trigger this UI has no reason to
+// have (see jni_onload.cpp's own on_started() comment for the full reasoning). Does not call
+// change.consume() equivalent (returns false) - same passive-relay philosophy as the pointer input
+// block below: volume keys still do their normal system action (adjust media volume) too.
 @Composable
 private fun KonativeRootComposable() {
     val windowInfo = LocalWindowInfo.current
     LaunchedEffect(windowInfo.isWindowFocused) {
         dispatchWindowFocusChangedToNative(windowInfo.isWindowFocused)
     }
+    val keyFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        keyFocusRequester.requestFocus()
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF1B5E20))
             .onSizeChanged { size -> dispatchWindowResizedToNative(size.width, size.height) }
+            .focusRequester(keyFocusRequester)
+            .focusable()
+            .onKeyEvent { keyEvent ->
+                // keyEvent.key.keyCode (a Long) is NOT the raw Android keycode in its low bits -
+                // real on-device logging caught this: Compose packs it as (rawKeyCode shl 32), so
+                // pressing KEYCODE_VOLUME_UP (24) produces key.keyCode == 103079215104
+                // (24L shl 32), and a naive .toInt() truncates to the all-zero low 32 bits, always
+                // reporting 0 regardless of which key was pressed. keyEvent.nativeKeyEvent (the real
+                // underlying android.view.KeyEvent) exposes the correct raw Int directly - simpler
+                // and less error-prone than un-packing key.keyCode's high bits by hand.
+                val keyCode = keyEvent.nativeKeyEvent.keyCode
+                when (keyEvent.type) {
+                    KeyEventType.KeyDown -> dispatchKeyEventToNative(keyCode, true)
+                    KeyEventType.KeyUp -> dispatchKeyEventToNative(keyCode, false)
+                }
+                false
+            }
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {

@@ -18,6 +18,7 @@
 #include "konative/ecs/glm_storage_self_check.hpp"
 #include "konative/ecs/registry_snapshot_self_check.hpp"
 #include "konative/embed/checked_blob.hpp"
+#include "konative/events/input/KeyEvent.hpp"
 #include "konative/events/input/TouchDownEvent.hpp"
 #include "konative/events/input/TouchMoveEvent.hpp"
 #include "konative/events/input/TouchUpEvent.hpp"
@@ -259,6 +260,13 @@ public:
         // by its own desktop stress test) - see on_tick()'s periodic snapshot below for the real
         // producer thread. Same sink-connection mechanism as every other event consumer here.
         world().events().sink<konative::events::persistence::SnapshotSavedEvent>().connect<&KonativeAndroidApp::on_snapshot_saved>(*this);
+
+        // The last unwired events/input/ type: KeyEvent.hpp existed with nothing dispatching it
+        // (confirmed by grep before building this - same shape touch/window closed earlier). Real
+        // producer: KonativeRootComposable's Modifier.onKeyEvent, observing real hardware key
+        // presses (volume up/down - present on every real Android device, phone included, unlike
+        // relying on a soft-keyboard/text-field trigger this trivial UI has no reason to have).
+        world().events().sink<konative::events::input::KeyEvent>().connect<&KonativeAndroidApp::on_key_event>(*this);
     }
     void on_resumed() override { konative::core::log_info("KonativeAndroidApp: on_resumed"); }
     void on_paused() override { konative::core::log_info("KonativeAndroidApp: on_paused"); }
@@ -356,6 +364,9 @@ public:
     void dispatch_window_focus_changed(bool has_focus) {
         world().events().trigger(konative::events::window::WindowFocusChangedEvent{has_focus});
     }
+    void dispatch_key_event(std::int32_t key_code, bool is_down) {
+        world().events().trigger(konative::events::input::KeyEvent{key_code, is_down});
+    }
 
 private:
     // Logs every occurrence, unlike on_tick()'s periodic summary above - real touches are
@@ -389,6 +400,10 @@ private:
     void on_window_focus_changed(const konative::events::window::WindowFocusChangedEvent& event) {
         konative::core::log_info("KonativeAndroidApp: WindowFocusChangedEvent has_focus={}",
                                   event.has_focus);
+    }
+    void on_key_event(const konative::events::input::KeyEvent& event) {
+        konative::core::log_info("KonativeAndroidApp: KeyEvent key_code={} is_down={}",
+                                  event.key_code, event.is_down);
     }
 
     // Delivered one frame after the background thread in on_tick() posts it (see that function's
@@ -510,6 +525,13 @@ void JNICALL native_dispatch_window_resized(JNIEnv*, jclass, jint width, jint he
 // KonativeRootComposable reading LocalWindowInfo.current.isWindowFocused inside a LaunchedEffect.
 void JNICALL native_dispatch_window_focus_changed(JNIEnv*, jclass, jboolean has_focus) {
     android_app().dispatch_window_focus_changed(has_focus == JNI_TRUE);
+}
+
+// Bound to KonativeEntryPoint.nativeDispatchKeyEvent(Int, Boolean) - real producer is
+// KonativeRootComposable's Modifier.onKeyEvent, observing real hardware key presses (see
+// KonativeAndroidApp::on_started()'s comment for why volume keys specifically).
+void JNICALL native_dispatch_key_event(JNIEnv*, jclass, jint key_code, jboolean is_down) {
+    android_app().dispatch_key_event(static_cast<std::int32_t>(key_code), is_down == JNI_TRUE);
 }
 
 } // namespace
@@ -639,17 +661,22 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
             const_cast<char*>("(Z)V"),
             reinterpret_cast<void*>(&native_dispatch_window_focus_changed),
         },
+        {
+            const_cast<char*>("nativeDispatchKeyEvent"),
+            const_cast<char*>("(IZ)V"),
+            reinterpret_cast<void*>(&native_dispatch_key_event),
+        },
     };
-    if (env->RegisterNatives(loaded.value().clazz.get(), native_methods, 9) != JNI_OK ||
-        konative::jni::check_and_clear_exception(env, "RegisterNatives(nativeDispatchLifecycle/nativeTick/nativeGetTickCount/nativeDispatchTouch*/nativeGetTouchCount/nativeDispatchWindow*)")) {
+    if (env->RegisterNatives(loaded.value().clazz.get(), native_methods, 10) != JNI_OK ||
+        konative::jni::check_and_clear_exception(env, "RegisterNatives(nativeDispatchLifecycle/nativeTick/nativeGetTickCount/nativeDispatchTouch*/nativeGetTouchCount/nativeDispatchWindow*/nativeDispatchKeyEvent)")) {
         konative::core::log_error(
             "JNI_OnLoad: RegisterNatives(nativeDispatchLifecycle/nativeTick/nativeGetTickCount/"
-            "nativeDispatchTouch*/nativeGetTouchCount/nativeDispatchWindow*) failed - the C++ "
-            "ECS/events core will not receive real Activity lifecycle transitions, ticks, touches, "
-            "or window resize/focus events this run, and the UI will not show live tick/touch "
-            "counts. Compose rendering is otherwise unaffected (these native methods are unrelated "
-            "to install()'s own handoff below); Kotlin's own call sites are individually try/caught "
-            "for exactly this case, see KonativeEntryPoint.kt.");
+            "nativeDispatchTouch*/nativeGetTouchCount/nativeDispatchWindow*/nativeDispatchKeyEvent) "
+            "failed - the C++ ECS/events core will not receive real Activity lifecycle transitions, "
+            "ticks, touches, window resize/focus events, or key events this run, and the UI will not "
+            "show live tick/touch counts. Compose rendering is otherwise unaffected (these native "
+            "methods are unrelated to install()'s own handoff below); Kotlin's own call sites are "
+            "individually try/caught for exactly this case, see KonativeEntryPoint.kt.");
     }
 
     // Step 6: ONE handoff call, then native code is done - everything past this point (Compose
