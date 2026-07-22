@@ -19,6 +19,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.changedToDown
+import androidx.compose.ui.input.pointer.changedToUp
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
@@ -116,6 +120,25 @@ object KonativeEntryPoint {
     // time. See KonativeRootComposable's own use of tickCountDisplay below.
     @JvmStatic
     external fun nativeGetTickCount(): Long
+
+    // Same RegisterNatives contract, bound to native_dispatch_touch_{down,move,up} - the real
+    // producer side of events/input/Touch{Down,Move,Up}Event.hpp (jni_onload.cpp's own comment has
+    // the full writeup of why these existed with nothing dispatching them until now). Driven by
+    // KonativeRootComposable's Modifier.pointerInput block below. pointerId is PointerInputChange.id
+    // .value truncated to Int - TouchDownEvent/TouchMoveEvent/TouchUpEvent all model it as
+    // std::int32_t (jni_onload.cpp), matching every other event struct's plain-value-type convention
+    // rather than carrying a 64-bit id no consumer needs yet.
+    @JvmStatic
+    external fun nativeDispatchTouchDown(pointerId: Int, x: Float, y: Float)
+    @JvmStatic
+    external fun nativeDispatchTouchMove(pointerId: Int, x: Float, y: Float)
+    @JvmStatic
+    external fun nativeDispatchTouchUp(pointerId: Int, x: Float, y: Float)
+
+    // Same RegisterNatives contract, bound to native_get_touch_count - same "let real Compose UI
+    // show real C++-side state" pattern as nativeGetTickCount() above.
+    @JvmStatic
+    external fun nativeGetTouchCount(): Long
 }
 
 // Backs KonativeRootComposable's live tick-count display - a plain, object-scoped
@@ -124,6 +147,11 @@ object KonativeEntryPoint {
 // composable to correctly trigger recomposition on change; Compose doesn't require State objects
 // driving a composable to themselves be remember{}-scoped.
 private var tickCountDisplay by mutableStateOf(0L)
+
+// Backs KonativeRootComposable's live touch-count display - same object-scoped State shape as
+// tickCountDisplay above, for the same reason (written from the pointerInput pointer-event loop
+// below, which is real code, not composition).
+private var touchCountDisplay by mutableStateOf(0L)
 
 // Mirrors jni_onload.cpp's own AndroidLifecycleEvent enum exactly - both sides must stay in sync.
 private object AndroidLifecycleEvent {
@@ -216,6 +244,44 @@ private fun queryTickCountFromNative(): Long {
     }
 }
 
+// Same try/catch-wrapped shape as dispatchTickToNative() above, for the same reason - driven by
+// KonativeRootComposable's Modifier.pointerInput block below, one call per real down/move/up change.
+private fun dispatchTouchDownToNative(pointerId: Int, x: Float, y: Float) {
+    try {
+        KonativeEntryPoint.nativeDispatchTouchDown(pointerId, x, y)
+    } catch (e: UnsatisfiedLinkError) {
+        Log.e("Konative", "dispatchTouchDownToNative: nativeDispatchTouchDown unavailable - the " +
+            "C++ ECS/events core will not see this touch; Compose rendering is unaffected.", e)
+    }
+}
+private fun dispatchTouchMoveToNative(pointerId: Int, x: Float, y: Float) {
+    try {
+        KonativeEntryPoint.nativeDispatchTouchMove(pointerId, x, y)
+    } catch (e: UnsatisfiedLinkError) {
+        Log.e("Konative", "dispatchTouchMoveToNative: nativeDispatchTouchMove unavailable - the " +
+            "C++ ECS/events core will not see this touch; Compose rendering is unaffected.", e)
+    }
+}
+private fun dispatchTouchUpToNative(pointerId: Int, x: Float, y: Float) {
+    try {
+        KonativeEntryPoint.nativeDispatchTouchUp(pointerId, x, y)
+    } catch (e: UnsatisfiedLinkError) {
+        Log.e("Konative", "dispatchTouchUpToNative: nativeDispatchTouchUp unavailable - the C++ " +
+            "ECS/events core will not see this touch; Compose rendering is unaffected.", e)
+    }
+}
+
+// Same try/catch-wrapped shape as queryTickCountFromNative() above, for the same reason.
+private fun queryTouchCountFromNative(): Long {
+    return try {
+        KonativeEntryPoint.nativeGetTouchCount()
+    } catch (e: UnsatisfiedLinkError) {
+        Log.e("Konative", "queryTouchCountFromNative: nativeGetTouchCount unavailable - the UI " +
+            "will not show a live touch count; Compose rendering is otherwise unaffected.", e)
+        touchCountDisplay
+    }
+}
+
 // Selects between the two real resources.arsc mechanisms (see embedded_kotlin/README.md's Update
 // sections for the full writeup of both): the general, API-30+ ResourcesLoader mechanism
 // (KonativeResourcesLoader.kt) if it installs successfully - which mutates the real Activity's own
@@ -265,10 +331,37 @@ private class ComposeHostOwner : LifecycleOwner, ViewModelStoreOwner, SavedState
 // jni_onload.cpp) - not just static text. Closes the loop from "the C++ ECS/systems core ticks,
 // but only logcat ever sees it" to something actually visible on screen, still using only the
 // same trivial foundation-only Compose surface as the line above it.
+//
+// The outer Box's Modifier.pointerInput block is the real producer for events/input/
+// Touch{Down,Move,Up}Event.hpp (jni_onload.cpp's own on_started() comment has the full writeup).
+// awaitPointerEventScope + a raw awaitPointerEvent() loop is the low-level Compose input API - this
+// observes every real pointer change (down/move/up, any number of simultaneous pointers) without
+// calling change.consume(), deliberately: this is a passive relay into the C++ event Dispatcher, not
+// a gesture handler competing for input with some other UI element (there isn't one here yet).
 @Composable
 private fun KonativeRootComposable() {
     Box(
-        modifier = Modifier.fillMaxSize().background(Color(0xFF1B5E20)),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF1B5E20))
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        for (change in event.changes) {
+                            val pointerId = change.id.value.toInt()
+                            val x = change.position.x
+                            val y = change.position.y
+                            when {
+                                change.changedToDown() -> dispatchTouchDownToNative(pointerId, x, y)
+                                change.changedToUp() -> dispatchTouchUpToNative(pointerId, x, y)
+                                change.positionChanged() -> dispatchTouchMoveToNative(pointerId, x, y)
+                            }
+                        }
+                        touchCountDisplay = queryTouchCountFromNative()
+                    }
+                }
+            },
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
@@ -278,6 +371,10 @@ private fun KonativeRootComposable() {
             )
             BasicText(
                 text = "C++ ticks: $tickCountDisplay",
+                style = TextStyle(color = Color.White, fontSize = 14.sp),
+            )
+            BasicText(
+                text = "C++ touches: $touchCountDisplay",
                 style = TextStyle(color = Color.White, fontSize = 14.sp),
             )
         }

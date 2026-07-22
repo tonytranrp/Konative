@@ -13,6 +13,9 @@
 #include "konative/app/entry_point.hpp"
 #include "konative/core/log.hpp"
 #include "konative/embed/checked_blob.hpp"
+#include "konative/events/input/TouchDownEvent.hpp"
+#include "konative/events/input/TouchMoveEvent.hpp"
+#include "konative/events/input/TouchUpEvent.hpp"
 #include "konative/jni/dex_loader.hpp"
 #include "konative/scheduling/taskflow_self_check.hpp"
 
@@ -114,6 +117,18 @@ public:
             "KonativeAndroidApp: {} real ECS entities created (each with a HeartbeatCounter "
             "component), one real system registered to increment them every tick.",
             kHeartbeatEntityCount);
+
+        // Resolves the other "defined since early on, never actually dispatched" open item:
+        // events/input/Touch{Down,Move,Up}Event.hpp existed with nothing anywhere in the codebase
+        // ever triggering them (confirmed by grep before writing this) until now.
+        // KonativeEntryPoint.kt's new Modifier.pointerInput block below is the real producer; these
+        // are real entt::dispatcher sinks, the same connection mechanism every other event consumer
+        // in this codebase already uses (see test_events.cpp/test_cross_thread_event_queue.cpp) -
+        // *this is a stable address for the sink to bind to (android_app() is a function-local
+        // static singleton, alive for the whole process).
+        world().events().sink<konative::events::input::TouchDownEvent>().connect<&KonativeAndroidApp::on_touch_down>(*this);
+        world().events().sink<konative::events::input::TouchMoveEvent>().connect<&KonativeAndroidApp::on_touch_move>(*this);
+        world().events().sink<konative::events::input::TouchUpEvent>().connect<&KonativeAndroidApp::on_touch_up>(*this);
     }
     void on_resumed() override { konative::core::log_info("KonativeAndroidApp: on_resumed"); }
     void on_paused() override { konative::core::log_info("KonativeAndroidApp: on_paused"); }
@@ -153,10 +168,37 @@ public:
     // is genuinely safe here, not just convenient; no cross-thread synchronization needed.
     [[nodiscard]] std::uint64_t tick_count() const { return tick_count_; }
 
+    // Same same-thread reasoning as tick_count() above - real touch dispatch (native_dispatch_touch_*
+    // below) and this read both happen on the Activity's main/UI thread only.
+    [[nodiscard]] std::uint64_t touch_event_count() const { return touch_event_count_; }
+
 private:
+    // Logs every occurrence, unlike on_tick()'s periodic summary above - real touches are
+    // discrete/user-paced (nowhere near 60-120Hz), so there's no flood risk, and seeing every one
+    // (with its real coordinates) is exactly the point of a first on-device verification pass.
+    void on_touch_down(const konative::events::input::TouchDownEvent& event) {
+        ++touch_event_count_;
+        konative::core::log_info(
+            "KonativeAndroidApp: TouchDownEvent pointer={} x={:.1f} y={:.1f} (total touch events: {})",
+            event.pointer_id, event.x, event.y, touch_event_count_);
+    }
+    void on_touch_move(const konative::events::input::TouchMoveEvent& event) {
+        ++touch_event_count_;
+        konative::core::log_info(
+            "KonativeAndroidApp: TouchMoveEvent pointer={} x={:.1f} y={:.1f} (total touch events: {})",
+            event.pointer_id, event.x, event.y, touch_event_count_);
+    }
+    void on_touch_up(const konative::events::input::TouchUpEvent& event) {
+        ++touch_event_count_;
+        konative::core::log_info(
+            "KonativeAndroidApp: TouchUpEvent pointer={} x={:.1f} y={:.1f} (total touch events: {})",
+            event.pointer_id, event.x, event.y, touch_event_count_);
+    }
+
     static constexpr std::uint64_t kTickLogInterval = 120; // ~1-2s of real frames on typical hardware
     static constexpr int kHeartbeatEntityCount = 3;
     std::uint64_t tick_count_ = 0;
+    std::uint64_t touch_event_count_ = 0;
 };
 
 // Function-local static, same singleton-via-static pattern examples/minimal_triangle/main.cpp's
@@ -224,6 +266,32 @@ void JNICALL native_dispatch_tick(JNIEnv*, jclass, jfloat delta_seconds) {
 // is a query, not another event - it doesn't go through events::Dispatcher at all.
 jlong JNICALL native_get_tick_count(JNIEnv*, jclass) {
     return static_cast<jlong>(android_app().tick_count());
+}
+
+// Bound to KonativeEntryPoint.nativeDispatchTouchDown/Move/Up(Int, Float, Float) - the real producer
+// side of events/input/Touch{Down,Move,Up}Event.hpp, which existed with nothing anywhere dispatching
+// them until now (see KonativeAndroidApp::on_started()'s sink connections above). trigger(), not
+// enqueue() - immediate synchronous dispatch, the same choice lifecycle events already made
+// (dispatcher.hpp's own doc comment), appropriate here too since KonativeEntryPoint.kt's
+// Modifier.pointerInput block calling these and World::tick()'s own Dispatcher::update() both run on
+// the same Activity main/UI thread - no cross-thread concern, no reason to defer a frame.
+void JNICALL native_dispatch_touch_down(JNIEnv*, jclass, jint pointer_id, jfloat x, jfloat y) {
+    android_app().world().events().trigger(
+        konative::events::input::TouchDownEvent{static_cast<std::int32_t>(pointer_id), x, y});
+}
+void JNICALL native_dispatch_touch_move(JNIEnv*, jclass, jint pointer_id, jfloat x, jfloat y) {
+    android_app().world().events().trigger(
+        konative::events::input::TouchMoveEvent{static_cast<std::int32_t>(pointer_id), x, y});
+}
+void JNICALL native_dispatch_touch_up(JNIEnv*, jclass, jint pointer_id, jfloat x, jfloat y) {
+    android_app().world().events().trigger(
+        konative::events::input::TouchUpEvent{static_cast<std::int32_t>(pointer_id), x, y});
+}
+
+// Bound to KonativeEntryPoint.nativeGetTouchCount() - same "let real Compose UI show real C++-side
+// state" pattern as native_get_tick_count() above, for the new touch-event counter.
+jlong JNICALL native_get_touch_count(JNIEnv*, jclass) {
+    return static_cast<jlong>(android_app().touch_event_count());
 }
 
 } // namespace
@@ -296,12 +364,13 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
         }
     }
 
-    // Step 5.6: bind Kotlin's nativeDispatchLifecycle(Int)/nativeTick(Float)/nativeGetTickCount()
-    // to the three functions above - see KonativeAndroidApp's own comment for why. Deliberately
-    // non-fatal on failure, same as the resources.arsc blob above: this wires a real feature (the
-    // C++ ECS/events core actually running, and its state actually visible in the rendered UI), but
-    // its absence doesn't prevent Compose from rendering - only degrades to the C++ side never
-    // seeing lifecycle transitions/ticks, and the UI never showing a live tick count. Must happen
+    // Step 5.6: bind Kotlin's nativeDispatchLifecycle(Int)/nativeTick(Float)/nativeGetTickCount()/
+    // nativeDispatchTouch{Down,Move,Up}(Int,Float,Float)/nativeGetTouchCount() to the functions above
+    // - see KonativeAndroidApp's own comment for why. Deliberately non-fatal on failure, same as the
+    // resources.arsc blob above: this wires a real feature (the C++ ECS/events core actually
+    // running, real touch input reaching it, and both states actually visible in the rendered UI),
+    // but its absence doesn't prevent Compose from rendering - only degrades to the C++ side never
+    // seeing lifecycle transitions/ticks/touches, and the UI never showing live counts. Must happen
     // before install() below even though the very first real call can't arrive until later (an
     // Activity lifecycle event firing, or Choreographer's first posted frame, are both asynchronous,
     // driven by the real Android framework afterward) - registering natives before handoff is simply
@@ -322,16 +391,36 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
             const_cast<char*>("()J"),
             reinterpret_cast<void*>(&native_get_tick_count),
         },
+        {
+            const_cast<char*>("nativeDispatchTouchDown"),
+            const_cast<char*>("(IFF)V"),
+            reinterpret_cast<void*>(&native_dispatch_touch_down),
+        },
+        {
+            const_cast<char*>("nativeDispatchTouchMove"),
+            const_cast<char*>("(IFF)V"),
+            reinterpret_cast<void*>(&native_dispatch_touch_move),
+        },
+        {
+            const_cast<char*>("nativeDispatchTouchUp"),
+            const_cast<char*>("(IFF)V"),
+            reinterpret_cast<void*>(&native_dispatch_touch_up),
+        },
+        {
+            const_cast<char*>("nativeGetTouchCount"),
+            const_cast<char*>("()J"),
+            reinterpret_cast<void*>(&native_get_touch_count),
+        },
     };
-    if (env->RegisterNatives(loaded.value().clazz.get(), native_methods, 3) != JNI_OK ||
-        konative::jni::check_and_clear_exception(env, "RegisterNatives(nativeDispatchLifecycle/nativeTick/nativeGetTickCount)")) {
+    if (env->RegisterNatives(loaded.value().clazz.get(), native_methods, 7) != JNI_OK ||
+        konative::jni::check_and_clear_exception(env, "RegisterNatives(nativeDispatchLifecycle/nativeTick/nativeGetTickCount/nativeDispatchTouch*/nativeGetTouchCount)")) {
         konative::core::log_error(
-            "JNI_OnLoad: RegisterNatives(nativeDispatchLifecycle/nativeTick/nativeGetTickCount) "
-            "failed - the C++ ECS/events core will not receive real Activity lifecycle transitions "
-            "or ticks this run, and the UI will not show a live tick count. Compose rendering is "
-            "otherwise unaffected (these native methods are unrelated to install()'s own handoff "
-            "below); Kotlin's own call sites are individually try/caught for exactly this case, see "
-            "KonativeEntryPoint.kt.");
+            "JNI_OnLoad: RegisterNatives(nativeDispatchLifecycle/nativeTick/nativeGetTickCount/"
+            "nativeDispatchTouch*/nativeGetTouchCount) failed - the C++ ECS/events core will not "
+            "receive real Activity lifecycle transitions, ticks, or touches this run, and the UI "
+            "will not show live tick/touch counts. Compose rendering is otherwise unaffected (these "
+            "native methods are unrelated to install()'s own handoff below); Kotlin's own call sites "
+            "are individually try/caught for exactly this case, see KonativeEntryPoint.kt.");
     }
 
     // Step 6: ONE handoff call, then native code is done - everything past this point (Compose

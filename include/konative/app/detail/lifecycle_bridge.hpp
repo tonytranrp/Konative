@@ -7,11 +7,13 @@
 #include "konative/events/lifecycle/AppStartedEvent.hpp"
 
 // Translates whichever platform glue is compiled in into the platform-agnostic lifecycle events
-// every Konative system actually reacts to. Not currently wired to anything - the previous driver
-// (platform/android's APP_CMD_* pump, ARCHITECTURE.md section 6.1) was deleted with the
-// NativeActivity design; the current JNI_OnLoad design's relationship to these events (e.g. driven
-// by the embedded dex's own ActivityLifecycleCallbacks calling back into native code) is a real
-// open item, not yet decided (ARCHITECTURE.md section 6.4).
+// every Konative system actually reacts to. Real, wired, and verified on-device since 2026-07-21
+// (ARCHITECTURE.md section 6.4/6.7): src/platform/android/jni_onload.cpp's KonativeAndroidApp calls
+// start()/resume()/pause()/destroy() (which call the dispatch_*() functions below) from
+// native_dispatch_lifecycle_event(), itself bound via RegisterNatives to
+// KonativeEntryPoint.kt's ActivityLifecycleCallbacks - the previous driver (platform/android's
+// APP_CMD_* pump, section 6.1) stays deleted, superseded by this JNI_OnLoad-based one, not replaced
+// by nothing.
 namespace konative::app::detail {
 
 inline void dispatch_started(konative::ecs::World& world) {
