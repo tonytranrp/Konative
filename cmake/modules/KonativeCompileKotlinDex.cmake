@@ -276,15 +276,27 @@ endif()
 # machine, but r8's own argfile format gives no safe way to handle that if it ever happens; the
 # --output/--lib/--pg-conf arguments below are passed as real argv entries (not through this
 # argfile) so CMake's own execute_process() handles spaces in THOSE correctly regardless.
+# kotlin-stdlib.jar and every KONATIVE_CLASSPATH_DIR jar are real dexing inputs too (see
+# KonativeEmbedKotlinDex.cmake's own comment on why kotlin-stdlib is sourced from the kotlinc
+# distribution rather than expected inside KONATIVE_CLASSPATH_DIR) - written into THIS SAME argfile
+# alongside the .class files, not passed as direct command-line arguments. A real, previously-latent
+# bug found empirically (2026-07-22, testing an automated dependency-resolver producing a longer
+# absolute output path with more total jars than this recipe had ever been exercised against
+# before): passing ${_classpath_jars} directly on the command line hit a real Windows "command line
+# too long" failure - it had simply never had enough jars at a long enough path to cross that limit
+# before. r8's own @argfile mechanism (already used for _class_files above) accepts a mix of .class
+# and .jar input paths interchangeably, so folding these into the same file fixes it generally
+# instead of just for today's specific jar count/path length.
 set(_class_files_argfile "${KONATIVE_GEN_DIR}/class_files.txt")
 file(WRITE "${_class_files_argfile}" "")
 foreach(_class_file IN LISTS _class_files)
   file(APPEND "${_class_files_argfile}" "${_class_file}\n")
 endforeach()
+file(APPEND "${_class_files_argfile}" "${KONATIVE_KOTLIN_STDLIB_JAR}\n")
+foreach(_classpath_jar IN LISTS _classpath_jars)
+  file(APPEND "${_class_files_argfile}" "${_classpath_jar}\n")
+endforeach()
 
-# kotlin-stdlib.jar is a real dexing input (see KonativeEmbedKotlinDex.cmake's own comment on why
-# it's sourced from the kotlinc distribution rather than expected inside KONATIVE_CLASSPATH_DIR) -
-# added alongside the Gradle-resolved dependency jars, not in place of them.
 execute_process(
   COMMAND "${KONATIVE_R8}"
           --min-api "${KONATIVE_MIN_API}"
@@ -293,8 +305,6 @@ execute_process(
           --output "${_dex_dir}"
           --pg-conf "${KONATIVE_PG_CONF}"
           "@${_class_files_argfile}"
-          "${KONATIVE_KOTLIN_STDLIB_JAR}"
-          ${_classpath_jars}
   RESULT_VARIABLE _r8_result
   OUTPUT_VARIABLE _r8_output
   ERROR_VARIABLE _r8_error
