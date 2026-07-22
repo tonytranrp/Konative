@@ -1,7 +1,8 @@
 # The Kotlin/Native <-> C++ C-ABI boundary - ARCHITECTURE.md section 6.3. No longer on this
-# project's critical path now that rendering is JVM-hosted Compose (ARCHITECTURE.md section 9) -
-# the single largest concentration of unproven risk has moved to the JNI_OnLoad-to-Compose chain
-# instead (embedded_kotlin/, include/konative/jni/). Kept because its C-ABI mechanics (real,
+# project's critical path now that rendering is JVM-hosted Compose, dex-embedded and loaded via
+# JNI_OnLoad (embedded_kotlin/, include/konative/jni/) - that chain was itself once flagged as the
+# framework's largest concentration of unproven risk (ARCHITECTURE.md section 9), but has since
+# been landed and repeatedly re-verified on real hardware. Kept because its C-ABI mechanics (real,
 # documented, unresolved community friction for this exact libc++/libm symbol-conflict combination)
 # remain real and useful for a possible future, non-rendering use of Kotlin/Native.
 add_library(konative_interop INTERFACE)

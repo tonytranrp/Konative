@@ -634,6 +634,15 @@ been combined before by anyone found in this research.
 - A near-zero-Kotlin/Java APK shell (`GameHub/testapp`'s `MainActivity` is a real, on-device-proven
   instance of exactly this shape, `System.loadLibrary()` and nothing else — Konative's own
   `testapp/` matches this shape exactly, per §6.4).
+- **The full `JNI_OnLoad`-to-rendered-Compose-UI chain** (§6.4/§6.6) — moved here from the "not
+  fully validated" list below; this was flagged as the framework's single largest concentration of
+  unproven risk right after the Kotlin/Native+EGL pivot, since no project found combines
+  native-triggered `ActivityLifecycleCallbacks` registration + runtime `ViewTree*Owner` fabrication
+  + Compose-from-a-`JNI_OnLoad`-loaded-dex quite this way. It's been real, working, and repeatedly
+  re-verified on real hardware since (§6.7's status table; real screenshotted rendering; this
+  exact chain is what every feature landed on 2026-07-21 — lifecycle dispatch, the tick heartbeat,
+  the cross-thread queue, the Taskflow self-check — builds directly on top of and depends on
+  working correctly, each one independently re-confirming it does).
 - **Taskflow's real thread-spawning/scheduling machinery on Android NDK arm64-v8a** — moved here
   from the unproven list below after `konative::scheduling::run_taskflow_self_check()`
   (`include/konative/scheduling/taskflow_self_check.hpp`) actually ran, for real, on the physical
@@ -645,14 +654,6 @@ been combined before by anyone found in this research.
 
 **Architecturally sound synthesis, partially de-risked by real prior art, still not fully
 validated — prototype first:**
-- **The full `JNI_OnLoad`-to-rendered-Compose-UI chain** (§6.4/§6.6) — no project found does
-  *exactly* this combination (native-triggered `ActivityLifecycleCallbacks` registration + runtime
-  `ViewTree*Owner` fabrication + Compose from a dex loaded by the app's own `JNI_OnLoad`,
-  `research/jni_activity_bootstrap_research.md` §4). Each individual piece has precedent
-  (`NativeActivity` for native-drives-content, `GameHub`'s dex-embedding, the
-  Compose-without-`ComponentActivity` manual-wiring pattern used by overlay/Service-hosted Compose
-  projects) but the combination itself is unpaved — this is now the framework's single largest
-  concentration of unproven risk, replacing the old Kotlin/Native+EGL entry in this list.
 - **Embedded blob size once Compose's own dependency graph is in the dex** — genuinely unmeasured
   (§6.6); `research/research.md` §8's "~2.5MB for a near-trivial Kotlin object" figure predates the
   Compose pivot and almost certainly undercounts once `compose-runtime`/`compose-ui`/

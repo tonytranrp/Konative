@@ -39,11 +39,12 @@ import platform.gles3.glClearColor
 // port the eglChooseConfig/eglCreateContext/eglCreateWindowSurface sequence from below.
 //
 // UNPROVEN when this was written (ARCHITECTURE.md section 9 as of then): this was called out as
-// the framework's single largest concentration of risk. That title has since moved - ARCHITECTURE.md
-// section 9 now assigns it to the JNI_OnLoad-to-rendered-Compose-UI chain instead, since this
-// module was never actually finished (the TODO below was never filled in) or shipped; this file's
-// own unfinished/unproven state stopped mattering once rendering moved to JVM-hosted Compose
-// entirely, rather than ever getting resolved. Egloo proves the EGL/GLES cinterop bindings compile
+// the framework's single largest concentration of risk. That title moved to the
+// JNI_OnLoad-to-rendered-Compose-UI chain for a while, then that chain was itself landed and
+// repeatedly re-verified on real hardware (ARCHITECTURE.md section 9's confirmed-precedent list) -
+// this module's own unfinished/unproven state (the TODO below was never filled in, never shipped)
+// simply stopped mattering once rendering moved to JVM-hosted Compose entirely, rather than ever
+// getting resolved. Egloo proves the EGL/GLES cinterop bindings compile
 // and link for Android native targets: it does NOT itself prove a JVM-free, NativeActivity-driven
 // render loop end to end on a real device - that validation was this project's own to do, via
 // testapp/'s adb verification loop, and never happened before the pivot away from this design.
