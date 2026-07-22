@@ -64,10 +64,14 @@ Verified equivalent to the hand-assembled classpath it replaces: a real
 on-device install+launch on the connected LDPlayer emulator showed clean logcat, all self-checks
 passing, and correct touch-input handling.
 
-**Not yet wired as the default** — `KONATIVE_KOTLIN_CLASSPATH_DIR`/`KONATIVE_AAPT2_AAR_DIR` still
-point at the original hand-assembled directories on this dev machine until this project is wired into
-an actual CI job (so a fresh checkout with no pre-existing hand-assembled classpath can still build).
-Dependency versions are pinned to the exact set already proven working
+**In CI (`.github/workflows/android-build.yml`), this resolver's output is the ONLY classpath
+source** — there is no hand-assembled fallback available on a hosted runner at all; the workflow
+runs `./gradlew resolveKonativeClasspath` and passes `resolved-output/kotlin-classpath`/
+`resolved-output/aapt2-aars` straight into the CMake configure step. **Locally, this dev machine's
+own `CMakeUserPresets.json` still points at the original hand-assembled directories, by choice, not
+necessity** — left alone since switching it isn't needed for anything to keep working, not because
+this resolver can't also serve local dev. Dependency versions are pinned to the exact set already
+proven working
 (`embedded_kotlin/README.md`'s own hard-won bug-fix history) rather than the newest available
 (`androidx.activity:activity:1.13.0`, `kotlinx-coroutines-android:1.11.0` both exist) — upgrading is a
 deliberate future decision, not a side effect of this project existing.
