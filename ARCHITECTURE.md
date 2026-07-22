@@ -139,13 +139,12 @@ EnTT (`skypjack/entt`) supplies three things Konative uses directly:
 - No EnTT-maintainer-published guidance exists on `entt::meta` compile-time cost at scale; the
   mitigations in §2 are general C++ template-heavy-project practice applied to EnTT's specific
   registration API, not EnTT doctrine.
-- **Update (2026-07-22): `entt::meta` + Boost.PFR auto-registration is now real, not just
-  architecturally sound** — `include/konative/reflect/pfr_auto_registration.hpp` (spike/prototype
-  landed, self-checked, verified on real hardware; see §9 below for the full writeup, including a
-  real, non-obvious `entt::forward_as_meta()` pitfall found and fixed along the way).
-  `entt::meta` + Glaze (§4) remains **architecturally sound but unvalidated in the wild** — no
-  third-party project doing it was found, and this session didn't prototype it either. Treat it as
-  prototype-first, not copy-from-precedent.
+- **Update (2026-07-22): both `entt::meta` + Boost.PFR auto-registration AND `entt::meta` + Glaze
+  reflection-driven JSON are now real, not just architecturally sound** —
+  `include/konative/reflect/pfr_auto_registration.hpp` and
+  `include/konative/reflect/meta_glaze_json.hpp` (both spikes landed, self-checked, verified on
+  real hardware; see §9 below for the full writeup of each, including a real, non-obvious
+  `entt::forward_as_meta()` pitfall found and fixed landing the first one).
 - **C++20 minimum.** Current EnTT (`main`) requires "a full-featured compiler that supports at
   least C++20" — stricter than older EnTT tags. Pin to a specific tag matching the NDK Clang
   version actually in use, and verify C++20 conformance before tracking `main`.
@@ -731,14 +730,12 @@ been combined before by anyone found in this research.
   of times over across real app launches — never once a duplicate `on_started()` sequence, a
   wrong-instance anomaly, or a self-check running twice. Evidence, not assumption, closes this now.
 
-**Architecturally sound synthesis, partially de-risked by real prior art, still not fully
-validated — prototype first:**
-- `entt::meta` combined with Glaze for reflection-driven JSON serialization (philosophically
-  clean, not found done anywhere as prior art).
-
-Treat this as the actual remaining R&D risk of this project's reflection surface - it needs a real
-spike/prototype before committing further architecture on top of an assumption that it works, the
-same way `entt::meta` + Boost.PFR did until 2026-07-22.
+**Historical framing (both items below have since landed - kept for the record, not as a
+still-pending risk):** this section originally described `entt::meta` combined with Boost.PFR
+(auto-registration) and with Glaze (reflection-driven JSON serialization) as "architecturally
+sound synthesis, partially de-risked by real prior art, still not fully validated - prototype
+first," and called this pairing "the actual R&D risk of this project." Both are now real, landed,
+self-checked, and verified on real hardware - see the two updates immediately below.
 
 **Update (2026-07-22): `entt::meta` + Boost.PFR auto-registration - landed, not just prototyped.**
 `include/konative/reflect/pfr_auto_registration.hpp`'s `reflect_component_auto<T>()` auto-registers
@@ -757,6 +754,31 @@ instance directly, relying on `meta_handle`'s own implicit `Type&` constructor.
 regression-guard pattern as the Taskflow/`BS::thread_pool`/EnTT-snapshot+cereal self-checks) and is
 confirmed passing on real hardware (LDPlayer x86_64 emulator, clean logcat, no regressions in
 anything else `on_started()` already does).
+
+**Update (2026-07-22): `entt::meta` + Glaze reflection-driven JSON - also landed.**
+`include/konative/reflect/meta_glaze_json.hpp`'s `meta_component_to_json()` serializes ANY
+`entt::meta`-reflected component to a real JSON object string, driven entirely by `entt::meta`'s
+own runtime data - the caller never names the component's fields as C++ identifiers. Two real
+pieces made this work: (1) `entt::hashed_string` is a genuine one-way hash, so nothing could
+recover a field's real name from its registered id alone - fixed by having
+`reflect_component_auto<T>()` also attach the real, PFR-derived name as a queryable `entt::meta`
+PROPERTY right after each field's `data<>()` registration, the idiomatic way `entt::meta` carries
+extra per-member metadata; (2) rather than build a `glz::generic`/`json_t` object incrementally
+(Glaze's own dynamic-JSON type, whose object-construction API turned out to be
+undocumented/internal-header-only as of v7.9.1, checked directly against the real repo before
+deciding not to chase it further), `meta_component_to_json()` hand-formats the surrounding object
+syntax while delegating each individual value's actual JSON encoding to Glaze's own real,
+strongly-typed `glz::write_json()` - a smaller, equally real test of the same pairing. Applied the
+`forward_as_meta()` lesson the PFR update above found, and it worked correctly on the first real
+run. A separate real bug surfaced by real desktop CI (GCC on `ubuntu-latest`), never reproduced on
+this project's own Clang/Windows dev machine or by Android CI's NDK Clang: Glaze's automatic
+reflection needs real external linkage for a type it reflects, and the self-check's own scratch
+comparison struct was originally declared locally inside the check function - GCC correctly,
+strictly rejected this (`declared using local type ..., is used but never defined [-fpermissive]`)
+where Clang silently accepted it. Fixed by giving that struct real namespace scope - the third
+genuine cross-toolchain bug this exact CI setup has caught this session alone, on entirely new
+code. `run_meta_glaze_json_self_check()` runs for real at every app startup and is confirmed
+passing on real hardware the same way.
 
 **The very first end-to-end
 milestone for this framework was exactly this: get a trivial Compose UI (a solid-color `Box`, real
