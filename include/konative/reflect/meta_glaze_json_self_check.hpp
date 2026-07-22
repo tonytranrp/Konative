@@ -25,6 +25,20 @@ struct GlazeSelfCheckComponent {
     bool enabled = false;
 };
 
+// A real, GCC-specific compile error found via real CI (2026-07-22, never reproduced on this
+// project's own Clang/Windows dev machine): Glaze's automatic reflection needs real EXTERNAL
+// linkage for a type it reflects (glz::detail::external<T> internally) - a type defined LOCALLY
+// inside a function body has no linkage, which GCC correctly rejects
+// ("declared using local type ..., is used but never defined [-fpermissive]") and Clang silently
+// accepted. Deliberately a SEPARATE shape from GlazeSelfCheckComponent above (not reused) - this
+// one exists purely to prove the JSON text meta_component_to_json() produces is independently
+// parseable, with zero relationship to reflect_component_auto<T>()/entt::meta.
+struct ParsedShape {
+    int count = 0;
+    float ratio = 0.0F;
+    bool enabled = false;
+};
+
 } // namespace detail
 
 // Verifies, in order: (1) a component reflected via reflect_component_auto<T>() (the SAME real
@@ -57,12 +71,7 @@ inline bool run_meta_glaze_json_self_check() {
     // ordinary C++ struct it has zero relationship to reflect_component_auto<T>()/entt::meta for -
     // confirming the JSON text itself is genuinely well-formed and semantically correct, not just
     // non-empty.
-    struct ParsedShape {
-        int count = 0;
-        float ratio = 0.0F;
-        bool enabled = false;
-    };
-    ParsedShape parsed{};
+    detail::ParsedShape parsed{};
     if (glz::read_json(parsed, json)) {
         return false; // a real Glaze parse error - the produced JSON was not valid/matching
     }
