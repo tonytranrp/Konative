@@ -22,12 +22,15 @@ pointing at your real NDK/SDK paths; do not commit one).
 ## Continuous integration
 
 `.github/workflows/desktop-tests.yml` builds and runs the full desktop test suite on every push/PR
-to `main` — a real, hosted-runner check for exactly what this doc's own Quick Start does. It's
-**desktop-only**: the Android presets need a real NDK plus the machine-local toolchain paths
-`CMakeUserPresets.json` provides, which a hosted runner doesn't have without real, separate setup
-work not yet done here. When `ARCHITECTURE.md` says something is "verified in CI," it means this
-workflow, for whatever subset of the desktop test suite actually covers that claim — not every
-claim in this project has Android-side CI coverage yet.
+to `main` — a real, hosted-runner check for exactly what this doc's own Quick Start does.
+`.github/workflows/android-build.yml` does the equivalent for both Android presets (`android-arm64`/
+`android-x86_64`): a real SDK/NDK/kotlinc set up fresh on the runner (not assumed pre-installed),
+and `tools/kotlin-classpath-resolver/` (see that folder's own README.md) standing in for
+`CMakeUserPresets.json`'s machine-local toolchain paths, confirming a real `libkonative_app_native.so`
+builds and links. It's build-only, not an on-device/rendering check the way the desktop suite
+actually runs its tests — when `ARCHITECTURE.md` says something is "verified in CI," it still means
+`desktop-tests.yml`'s test suite specifically, not the Android build workflow, unless stated
+otherwise.
 
 ## Troubleshooting — real, reproduced issues and their fixes
 
