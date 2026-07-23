@@ -7,8 +7,18 @@ name: Android build
 # section 6.6/6.7 documents, real Android SDK/NDK/kotlinc downloaded fresh each run (not assumed
 # pre-installed on the runner image), and tools/kotlin-classpath-resolver/ (see that folder's own
 # README.md) resolving the AndroidX/Compose/coroutines classpath instead of a hand-assembled,
-# machine-local one. Build-only, matching Task scope: no emulator/instrumented-test step here (a
-# real, separate, larger addition if ever wanted - reactivecircus/android-emulator-runner or similar).
+# machine-local one.
+#
+# Two independent jobs. `android-build` (below) matrix-builds the .so for both ABIs and proves it
+# LINKS - a purely static check that was, until now, this file's whole scope ("Build-only... no
+# emulator/instrumented-test step here" used to be the literal claim right here). `android-emulator-
+# verify` closes that exact gap: it builds the real testapp/ APK via Gradle, installs+launches it on
+# a real, hardware-accelerated emulator, and fails the job if the app crashes on startup or if any of
+# its real on-device self-checks (jni_onload.cpp's on_started()) report FAILED in logcat. This is the
+# one check that would have automatically caught this project's worst bug to date - a device-rotation
+# crash that shipped silently for a full session because no CI step ever actually ran the app (see
+# the project-konative-autonomous-loop memory entry / git history for the full writeup) - instead of
+# depending on a human remembering to exercise the app for real on a connected device.
 
 on:
   push:
@@ -154,3 +164,187 @@ jobs:
           SO_PATH="build/${{ matrix.preset }}/src/platform/android/libkonative_app_native.so"
           test -s "$SO_PATH"
           file "$SO_PATH"
+
+  android-emulator-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+      KOTLIN_VERSION: "2.4.0"
+      # Build-time SDK (compileSdk=36 in testapp/app/build.gradle.kts) - independent of which API
+      # level the emulator itself runs (below). A higher compileSdk than the emulator's runtime API
+      # is normal, supported Android practice as long as the runtime API falls within
+      # [minSdk, targetSdk] (26..36 here).
+      SDK_PLATFORM: "36"
+      SDK_BUILD_TOOLS: "36.0.0"
+      NDK_VERSION: "r28c"
+      # Matches the API level already verified end-to-end on the local, physically-tested LDPlayer
+      # x86_64 emulator (see the project-konative-testapp memory entry) - a known-good combination,
+      # not a guess at what the hosted runner's own emulator images support.
+      EMULATOR_API_LEVEL: 34
+    steps:
+      - uses: actions/checkout@v4
+
+      # Hardware acceleration for the emulator - without this it's too slow to boot inside any
+      # reasonable job timeout on a Linux runner. GitHub-hosted Linux runners do expose /dev/kvm;
+      # this is the standard, well-documented recipe from reactivecircus/android-emulator-runner's
+      # own README, not a project-specific workaround.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install a pinned, modern CMake + Ninja
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "~3.28.0"
+          ninjaVersion: "^1.11.0"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK (platform ${{ env.SDK_PLATFORM }}, build-tools ${{ env.SDK_BUILD_TOOLS }})
+        uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools platforms;android-${{ env.SDK_PLATFORM }} build-tools;${{ env.SDK_BUILD_TOOLS }}"
+
+      - name: Set up Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+
+      - name: Download and verify the real kotlinc distribution
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            curl -fsSL -o kotlin-compiler.zip "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
+            curl -fsSL -o kotlin-compiler.zip.sha256 "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip.sha256"
+            echo "$(cat kotlin-compiler.zip.sha256)  kotlin-compiler.zip" | sha256sum -c -
+            unzip -q kotlin-compiler.zip
+            echo "KONATIVE_KOTLINC=$PWD/kotlinc/bin/kotlinc" >> "$GITHUB_ENV"
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: cpm-cache-${{ runner.os }}-${{ hashFiles('cmake/modules/KonativeDependencies.cmake') }}
+          restore-keys: |
+            cpm-cache-${{ runner.os }}-
+
+      - name: Set up Gradle (wrapper/dependency caching for both the resolver and testapp/ builds below)
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Resolve the Kotlin/AndroidX classpath (tools/kotlin-classpath-resolver/)
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            cd tools/kotlin-classpath-resolver
+            echo "sdk.dir=$ANDROID_HOME" > local.properties
+            ./gradlew resolveKonativeClasspath --no-daemon
+
+      - name: Build the real testapp/ debug APK via Gradle
+        # Mirrors testapp/README.md's own documented recipe exactly. konativeNdkPath is pinned to
+        # the same nttld/setup-ndk-provided r28c used by the android-build job above (deterministic,
+        # consistent across both jobs) rather than left to AGP's own SDK-managed NDK provisioning.
+        # konativeR8/konativeJavac are left to KonativeEmbedKotlinDex.cmake's own auto-discovery,
+        # same as android-build - neither has ever hit a real issue needing an explicit pin.
+        run: |
+          cd testapp
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          ./gradlew assembleDebug --no-daemon \
+            -PkonativeNdkPath="${{ steps.setup-ndk.outputs.ndk-path }}" \
+            -PkonativeKotlinc="$KONATIVE_KOTLINC" \
+            -PkonativeAndroidJar="$ANDROID_HOME/platforms/android-$SDK_PLATFORM/android.jar" \
+            -PkonativeAapt2="$ANDROID_HOME/build-tools/$SDK_BUILD_TOOLS/aapt2" \
+            -PkonativeKotlinClasspathDir="$GITHUB_WORKSPACE/tools/kotlin-classpath-resolver/resolved-output/kotlin-classpath" \
+            -PkonativeAapt2AarDir="$GITHUB_WORKSPACE/tools/kotlin-classpath-resolver/resolved-output/aapt2-aars"
+
+      - name: AVD cache
+        uses: actions/cache@v4
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ env.EMULATOR_API_LEVEL }}
+
+      # Standard reactivecircus/android-emulator-runner two-step pattern: boot once with animations
+      # enabled to let the home screen fully settle, snapshot it, then cache the snapshot so every
+      # future run boots from it instead of a cold start. disable-animations is false here
+      # specifically (per the action's own README) so the cached snapshot captures a settled state.
+      - name: Create AVD and generate snapshot for caching
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ env.EMULATOR_API_LEVEL }}
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "Generated AVD snapshot for caching."
+
+      # The real verification step: install the real APK, launch the real MainActivity, then check
+      # real logcat output for either of the two ways a startup can genuinely fail - a crash, or a
+      # reported self-check failure - rather than just checking "did `am start` return 0" (which
+      # would NOT have caught the rotation bug either, since that bug left the process running with
+      # a blank screen, not crashed). Asserting "at least 8" rather than "exactly 8" self-check
+      # PASSED lines is deliberate: robust to a future 9th self-check being added without this
+      # threshold silently going stale, while still catching "on_started() never ran at all" (0 or
+      # near-0 matches) just as reliably as an exact count would.
+      - name: Install + launch the real APK on a hardware-accelerated emulator, verify a clean startup
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ env.EMULATOR_API_LEVEL }}
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            APK_PATH="$(find testapp/app/build -iname '*.apk' | head -n1)"
+            echo "Installing $APK_PATH"
+            adb install -t -r "$APK_PATH"
+            adb logcat -c
+            adb shell am start -n com.konative.testapp/.MainActivity
+            sleep 15
+            adb logcat -d > "$GITHUB_WORKSPACE/logcat.txt"
+            adb exec-out screencap -p > "$GITHUB_WORKSPACE/konative_emulator_screenshot.png" || true
+            echo "----- logcat tail -----"
+            tail -n 250 "$GITHUB_WORKSPACE/logcat.txt"
+
+            if grep -qE "FATAL EXCEPTION|Process: com\.konative\.testapp.*has died" "$GITHUB_WORKSPACE/logcat.txt"; then
+              echo "::error::com.konative.testapp crashed on launch - see the uploaded logcat.txt artifact"
+              exit 1
+            fi
+            if grep -q "self-check FAILED" "$GITHUB_WORKSPACE/logcat.txt"; then
+              echo "::error::at least one real on-device self-check reported FAILED - see the uploaded logcat.txt artifact"
+              exit 1
+            fi
+            PASS_COUNT=$(grep -c "self-check PASSED" "$GITHUB_WORKSPACE/logcat.txt" || true)
+            echo "Self-checks PASSED: $PASS_COUNT (expect at least 8 - jni_onload.cpp's on_started())"
+            if [ "$PASS_COUNT" -lt 8 ]; then
+              echo "::error::expected at least 8 'self-check PASSED' lines in logcat, found $PASS_COUNT - on_started() likely never ran (native library failed to load, or install() never fired)"
+              exit 1
+            fi
+
+      - name: Upload logcat + screenshot as evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-emulator-verify-evidence
+          path: |
+            logcat.txt
+            konative_emulator_screenshot.png
+          if-no-files-found: warn

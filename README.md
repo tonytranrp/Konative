@@ -1,6 +1,7 @@
 # Konative
 
 [![Desktop tests](https://github.com/tonytranrp/Konative/actions/workflows/desktop-tests.yml/badge.svg)](https://github.com/tonytranrp/Konative/actions/workflows/desktop-tests.yml)
+[![Android build](https://github.com/tonytranrp/Konative/actions/workflows/android-build.yml/badge.svg)](https://github.com/tonytranrp/Konative/actions/workflows/android-build.yml)
 
 Konative fuses Kotlin (rendered with Jetpack Compose) and C++ into a single native Android `.so`. Your app's own build embeds real, compiled Kotlin+Compose bytecode as linked data inside the `.so`; at load time, the `.so`'s own `JNI_OnLoad` verifies it (a build-integrity self-check, SHA-256 over the embedded blob) and loads it via `dalvik.system.InMemoryDexClassLoader`, so your Compose UI runs as real JVM code inside your app's already-live ART process — no separate JVM to bootstrap, no `NativeActivity`, no raw EGL/GLES. On the Java/Kotlin side, this is deliberately as close to invisible as `System.loadLibrary()` gets: the entire app-side `.kt` footprint is one loader file. It's the Corrosion-for-Cargo idea applied to this pipeline: a first-party CMake layer (`kotlinc`+Compose-compiler-plugin+`aapt2`+`r8`+`.incbin`-embed) that wraps the real toolchain end to end, rather than a one-off hand-rolled build script.
 
