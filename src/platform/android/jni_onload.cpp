@@ -16,6 +16,7 @@
 #include "konative/app/entry_point.hpp"
 #include "konative/core/log.hpp"
 #include "konative/ecs/glm_storage_self_check.hpp"
+#include "konative/ecs/registry.hpp"
 #include "konative/ecs/registry_snapshot_self_check.hpp"
 #include "konative/embed/checked_blob.hpp"
 #include "konative/events/input/KeyEvent.hpp"
@@ -282,7 +283,7 @@ public:
         // registry.emplace<T>() call, same as before - reflection is an additional, generic
         // construction path for tooling, not a replacement for everyday direct construction
         // (reflect/README.md's own framing).
-        const entt::entity reflected_entity = registry.create();
+        const konative::ecs::Entity reflected_entity = registry.create();
         auto emplace_type = entt::resolve(kHeartbeatCounterReflectId);
         auto emplace_func = emplace_type ? emplace_type.func(entt::hashed_string{"emplace"}) : entt::meta_func{};
         const bool reflected_emplace_ok =
@@ -390,7 +391,7 @@ public:
             {
                 cereal::BinaryOutputArchive archive(buffer);
                 entt::snapshot{world().registry()}
-                    .get<entt::entity>(archive)
+                    .get<konative::ecs::Entity>(archive)
                     .get<HeartbeatCounter>(archive);
             }
             std::thread([bytes = buffer.str(), queue = &snapshot_queue_] {

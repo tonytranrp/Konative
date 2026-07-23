@@ -7,10 +7,6 @@
 namespace konative::core {
 
 template <typename T>
-concept TriviallyRelocatable = std::is_trivially_move_constructible_v<T> &&
-                                std::is_trivially_destructible_v<T>;
-
-template <typename T>
 concept Aggregate = std::is_aggregate_v<T>;
 
 // Satisfied by every Konative event type (konative/events/**) - a plain aggregate struct, no
