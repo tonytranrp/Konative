@@ -38,15 +38,21 @@ build/
 .cache/
 compile_commands.json
 
-# Gradle (testapp/) - caches, wrapper jar, and build output; none of this is vendored
+# Gradle (testapp/) - caches and build output; none of this is vendored. The wrapper itself
+# (gradlew/gradlew.bat/gradle/wrapper/gradle-wrapper.jar) is DELIBERATELY tracked, not ignored -
+# see testapp/README.md and ARCHITECTURE.md's CI status table. It used to be listed here (a
+# copy-pasted-template mistake - the standard, correct Gradle convention is the opposite: commit
+# the wrapper so a fresh checkout builds without a pre-installed Gradle), which is exactly why
+# android-build.yml's android-emulator-verify job failed its first real CI run with a plain
+# "./gradlew: No such file or directory" - a real gap invisible on this dev machine, which always
+# had a real Gradle distribution already installed and never needed ./gradlew to notice it was
+# missing.
 testapp/.gradle/
+testapp/.kotlin/
 testapp/**/build/
 testapp/**/.cxx/
 testapp/.idea/
 testapp/local.properties
-testapp/gradle/wrapper/gradle-wrapper.jar
-testapp/gradlew
-testapp/gradlew.bat
 
 # Gradle (tools/kotlin-classpath-resolver/) - same shape as testapp/'s own Gradle exclusions above;
 # the resolved output directories themselves (a machine-local cache of downloaded jars/AARs) are

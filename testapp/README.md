@@ -55,10 +55,15 @@ cd testapp
 adb install -t -r <the real APK - see "Where the APK actually lands" below>
 ```
 
-(A `gradle wrapper` run — or opening this folder in Android Studio once — is needed once to
-generate `gradlew`/`gradle/wrapper/gradle-wrapper.jar`; neither is vendored in this skeleton. In the
-meantime, any real, sufficiently-recent Gradle distribution invoked directly against this folder
-works too — confirmed with a real, unmodified Gradle 9.4.1 against this project's pinned AGP 8.5.2 -
+(`gradlew`/`gradlew.bat`/`gradle/wrapper/gradle-wrapper.jar` are real, committed files - genuinely
+vendored, not a placeholder - generated via a real `gradle wrapper --gradle-version 9.4.1` run and
+tracked normally (standard Gradle convention: commit the wrapper so a fresh checkout builds without
+a pre-installed Gradle). This used to NOT be true - `.gitignore` explicitly excluded these 3 files
+until `android-build.yml`'s `android-emulator-verify` job's first real CI run failed with a plain
+`./gradlew: No such file or directory`, since this dev machine always had a real Gradle already
+installed and invoked it directly, never noticing `./gradlew` itself was missing. Any real,
+sufficiently-recent Gradle distribution invoked directly against this folder still works too, same
+as before - confirmed with a real, unmodified Gradle 9.4.1 against this project's pinned AGP 8.5.2 -
 `gradlew`'s only real job is fetching+pinning one specific Gradle version automatically, it is not
 otherwise special.)
 
