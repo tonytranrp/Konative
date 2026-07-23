@@ -16,6 +16,7 @@ add_executable(konative_tests
   test_spsc_event_queue.cpp
   test_pfr_auto_registration.cpp
   test_meta_glaze_json.cpp
+  test_app_config.cpp
 )
 target_link_libraries(konative_tests PRIVATE konative::konative doctest::doctest)
 konative_apply_warnings(konative_tests)

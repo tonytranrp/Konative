@@ -6,6 +6,7 @@ target_sources(konative_app INTERFACE
   BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/../..
   FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/application.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/app_config.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/entry_point.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/detail/lifecycle_bridge.hpp
 )

@@ -806,6 +806,25 @@ type, sidestepping the ambiguity entirely. The extended self-check (write, read 
 instance, and a partial-update case) is confirmed passing on real hardware the same way as every
 other self-check here.
 
+**Later: `AppConfig` (`include/konative/app/app_config.hpp`) - the first real, non-synthetic
+consumer of both pairings.** Every test/self-check for PFR auto-registration and Glaze JSON up to
+this point used a purpose-built, self-check-only type (`PfrSelfCheckComponent`,
+`GlazeSelfCheckComponent`) - proof the MECHANISM works, not that a real app component anyone
+actually cares about was ever run through it. `jni_onload.cpp`'s `on_started()` now reflects a real
+`AppConfig` struct (`tick_log_interval`, `snapshot_interval_ticks` - the exact two values that used
+to be hardcoded `static constexpr` members of `KonativeAndroidApp`), parses a compiled-in JSON
+default through `meta_component_from_json()`, and stores the result in `registry().ctx()` - also
+this codebase's first real call site for `entt::registry::ctx()` itself (`ecs/world.hpp`'s own doc
+comment had named it as Konative's intended DI/composition-root mechanism since early in the
+project, with zero real usage anywhere until now). `on_tick()` reads `AppConfig` back out of
+`ctx()` every frame instead of a compile-time constant - a real, live, per-frame dependency lookup,
+not just a startup-time write. The JSON itself is still a compiled-in literal, not read from a real
+external file/asset yet - that remains a genuine, separate follow-up (Android asset, internal
+storage, or a future hot-reload channel), consistent with `KonativeDependencies.cmake`'s own
+"config/hot-reload" framing for why Glaze was chosen in the first place. Desktop-tested against the
+real `AppConfig` type directly (`tests/test_app_config.cpp`), not a synthetic stand-in, covering the
+default round trip, the exact partial-JSON shape `on_started()` uses, and real `ctx()` emplace/get.
+
 **The very first end-to-end
 milestone for this framework was exactly this: get a trivial Compose UI (a solid-color `Box`, real
 `BasicText` — see §6.6/§6.7) to actually render as `MainActivity`'s content view on a connected test

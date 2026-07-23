@@ -12,6 +12,7 @@
 #include <cereal/archives/binary.hpp>
 #include <jni.h>
 
+#include "konative/app/app_config.hpp"
 #include "konative/app/application.hpp"
 #include "konative/app/entry_point.hpp"
 #include "konative/core/log.hpp"
@@ -27,8 +28,10 @@
 #include "konative/events/window/WindowFocusChangedEvent.hpp"
 #include "konative/events/window/WindowResizedEvent.hpp"
 #include "konative/jni/dex_loader.hpp"
+#include "konative/reflect/meta_glaze_json.hpp"
 #include "konative/reflect/meta_glaze_json_self_check.hpp"
 #include "konative/reflect/meta_registry.hpp"
+#include "konative/reflect/pfr_auto_registration.hpp"
 #include "konative/reflect/pfr_auto_registration_self_check.hpp"
 #include "konative/scheduling/cross_thread_event_queue.hpp"
 #include "konative/scheduling/spsc_event_queue_self_check.hpp"
@@ -262,8 +265,39 @@ public:
 
         // Real ECS proof, the one piece Dispatcher/events + the tick driver + Taskflow above didn't
         // cover: create real entities with a real component, register a real system the standard
-        // way. on_tick() below reports the real, live result every kTickLogInterval frames.
+        // way. on_tick() below reports the real, live result every AppConfig::tick_log_interval
+        // frames (see the real AppConfig load, right below).
         auto& registry = world().registry();
+
+        // AppConfig - the first real, non-synthetic consumer of the entt::meta + Boost.PFR
+        // auto-registration and entt::meta + Glaze JSON pairings above (both previously only ever
+        // exercised by their own self-check-only test types), and entt::registry::ctx()'s first
+        // real call site (world.hpp's own doc comment names it as Konative's intended DI/
+        // composition-root mechanism - "register cross-cutting services via
+        // registry().ctx().emplace<Service>(...)" - unused anywhere until now). A compiled-in
+        // default JSON string for now, not read from a real external file/asset - that's a real,
+        // separate follow-up (Android asset, internal storage, or a future hot-reload channel),
+        // not built here. Deliberately partial (only overrides tick_log_interval) to prove Glaze's
+        // documented "partial update" semantics for real: snapshot_interval_ticks is left at its
+        // struct default (300), not treated as a parse error for being absent from the JSON.
+        constexpr entt::id_type kAppConfigReflectId = entt::hashed_string{"konative::app::AppConfig"};
+        konative::reflect::reflect_component_auto<konative::app::AppConfig>(kAppConfigReflectId);
+        konative::app::AppConfig app_config{};
+        constexpr const char* kDefaultAppConfigJson = R"({"tick_log_interval":180})";
+        const entt::meta_type app_config_type = entt::resolve(kAppConfigReflectId);
+        if (!konative::reflect::meta_component_from_json(app_config_type, app_config,
+                                                           kDefaultAppConfigJson)) {
+            konative::core::log_error(
+                "KonativeAndroidApp: AppConfig JSON parse failed - falling back to the struct's own "
+                "compiled-in defaults (tick_log_interval={}, snapshot_interval_ticks={}).",
+                app_config.tick_log_interval, app_config.snapshot_interval_ticks);
+        }
+        registry.ctx().emplace<konative::app::AppConfig>(app_config);
+        konative::core::log_info(
+            "KonativeAndroidApp: AppConfig loaded via entt::meta + Glaze JSON "
+            "(tick_log_interval={}, snapshot_interval_ticks={}) and stored in registry().ctx() - "
+            "real reflection-driven config, not a synthetic self-check.",
+            app_config.tick_log_interval, app_config.snapshot_interval_ticks);
 
         // reflect_component<T>()'s registration context is process-global, not per-call. Re-running
         // it for the SAME type/id is actually a safe no-op (entt::meta<T>() is deliberately
@@ -348,15 +382,21 @@ public:
     void on_paused() override { konative::core::log_info("KonativeAndroidApp: on_paused"); }
     void on_destroyed() override { konative::core::log_info("KonativeAndroidApp: on_destroyed"); }
 
-    // Logs a summary every kTickLogInterval frames rather than every single tick (Choreographer
-    // ticks once per display refresh, ~60-120Hz on real hardware - logging every occurrence would
-    // flood logcat for no diagnostic benefit, the same "downgrade high-frequency routine noise to a
-    // periodic summary" lesson this codebase has already re-learned once for a different kind of
-    // per-frame spam). Real proof this is alive: tick_count_ only advances while Choreographer is
-    // actually posting frames, i.e. only while the Activity is genuinely resumed.
+    // Logs a summary every AppConfig::tick_log_interval frames rather than every single tick
+    // (Choreographer ticks once per display refresh, ~60-120Hz on real hardware - logging every
+    // occurrence would flood logcat for no diagnostic benefit, the same "downgrade high-frequency
+    // routine noise to a periodic summary" lesson this codebase has already re-learned once for a
+    // different kind of per-frame spam). Real proof this is alive: tick_count_ only advances while
+    // Choreographer is actually posting frames, i.e. only while the Activity is genuinely resumed.
+    //
+    // Reads AppConfig fresh from registry().ctx() every call rather than caching it in a member -
+    // a real per-frame dependency lookup (entt::context's own lookup is a type-indexed, O(1)
+    // operation, not a meaningful per-frame cost), proving ctx() genuinely works as a live
+    // read path, not just at the one on_started() write above.
     void on_tick(float delta_seconds) override {
         ++tick_count_;
-        if (tick_count_ % kTickLogInterval == 0) {
+        const auto& app_config = world().registry().ctx().get<konative::app::AppConfig>();
+        if (tick_count_ % static_cast<std::uint64_t>(app_config.tick_log_interval) == 0) {
             // world_.tick() (called before on_tick(), see Application::tick()) already ran
             // increment_heartbeat_counters this frame - reading the view here proves the real
             // Registry/View/System pipeline is genuinely operating, not just that emplace() didn't
@@ -375,18 +415,18 @@ public:
                 tick_count_, delta_seconds, entity_count, total_heartbeat_ticks);
         }
 
-        // CrossThreadEventQueue's real production use: every kSnapshotIntervalTicks, snapshot the
-        // registry's HeartbeatCounters SYNCHRONOUSLY, right here on the main thread - entt::snapshot
-        // reads live storage directly, so capturing it on any OTHER thread while this same thread
-        // might concurrently mutate it (via increment_heartbeat_counters, run earlier this exact
-        // frame by world_.tick()) would be a real data race. The captured bytes are then handed by
-        // VALUE to a detached background thread, which only ever touches its own immutable copy -
-        // no shared mutable state, no race - and posts a real SnapshotSavedEvent back across the
-        // lock-free boundary once done. Detached, not joined: this is a small, bounded, fire-and-
+        // CrossThreadEventQueue's real production use: every AppConfig::snapshot_interval_ticks,
+        // snapshot the registry's HeartbeatCounters SYNCHRONOUSLY, right here on the main thread -
+        // entt::snapshot reads live storage directly, so capturing it on any OTHER thread while this
+        // same thread might concurrently mutate it (via increment_heartbeat_counters, run earlier
+        // this exact frame by world_.tick()) would be a real data race. The captured bytes are then
+        // handed by VALUE to a detached background thread, which only ever touches its own immutable
+        // copy - no shared mutable state, no race - and posts a real SnapshotSavedEvent back across
+        // the lock-free boundary once done. Detached, not joined: this is a small, bounded, fire-and-
         // forget job: Taskflow (already proven working, see the self-check above) would be the
         // right tool for something recurring/coordinated, but constructing a whole tf::Executor for
         // one periodic single-shot job would be more machinery than this needs.
-        if (tick_count_ % kSnapshotIntervalTicks == 0) {
+        if (tick_count_ % static_cast<std::uint64_t>(app_config.snapshot_interval_ticks) == 0) {
             std::ostringstream buffer;
             {
                 cereal::BinaryOutputArchive archive(buffer);
@@ -492,8 +532,8 @@ private:
             "real ECS state and reported back via CrossThreadEventQueue.", event.byte_size);
     }
 
-    static constexpr std::uint64_t kTickLogInterval = 120; // ~1-2s of real frames on typical hardware
-    static constexpr std::uint64_t kSnapshotIntervalTicks = 300; // ~5s of real frames on typical hardware
+    // tick_log_interval/snapshot_interval_ticks now live in AppConfig (registry().ctx()), not here -
+    // see on_started()'s real AppConfig load and on_tick()'s per-frame ctx() read above.
     static constexpr int kHeartbeatEntityCount = 3;
     std::uint64_t tick_count_ = 0;
     std::uint64_t touch_event_count_ = 0;
