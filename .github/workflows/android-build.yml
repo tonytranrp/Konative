@@ -306,12 +306,13 @@ jobs:
 
       # The real verification step: install the real APK, launch the real MainActivity, then check
       # real logcat output for either of the two ways a startup can genuinely fail - a crash, or a
-      # reported self-check failure - rather than just checking "did `am start` return 0" (which
-      # would NOT have caught the rotation bug either, since that bug left the process running with
-      # a blank screen, not crashed). Asserting "at least 8" rather than "exactly 8" self-check
-      # PASSED lines is deliberate: robust to a future 9th self-check being added without this
-      # threshold silently going stale, while still catching "on_started() never ran at all" (0 or
-      # near-0 matches) just as reliably as an exact count would.
+      # reported self-check failure. The actual logic lives in .github/scripts/verify-emulator-run.sh,
+      # invoked as a real script file rather than inline here - a real first CI run found
+      # reactivecircus/android-emulator-runner does NOT execute a multi-line `script:` value as one
+      # shell script the way an ordinary `run: |` step does; it runs each line as its own
+      # independent `sh -c` call, breaking both multi-line if/fi control flow and cross-line shell
+      # variable persistence (see that script's own top comment for the exact failure that proved
+      # this). A single `bash <file>` invocation sidesteps the whole quirk.
       - name: Install + launch the real APK on a hardware-accelerated emulator, verify a clean startup
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -321,36 +322,7 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: |
-            APK_PATH="$(find "$GITHUB_WORKSPACE/testapp/app/build" -iname '*.apk' | head -n1)"
-            if [ -z "$APK_PATH" ]; then
-              echo "::error::no .apk found under $GITHUB_WORKSPACE/testapp/app/build - the Gradle build step above should have produced one (see testapp/README.md's own 'Where the APK actually lands' note: the exact path is Gradle-version-dependent, this searches the whole tree rather than a fixed path)"
-              exit 1
-            fi
-            echo "Installing $APK_PATH"
-            adb install -t -r "$APK_PATH"
-            adb logcat -c
-            adb shell am start -n com.konative.testapp/.MainActivity
-            sleep 15
-            adb logcat -d > "$GITHUB_WORKSPACE/logcat.txt"
-            adb exec-out screencap -p > "$GITHUB_WORKSPACE/konative_emulator_screenshot.png" || true
-            echo "----- logcat tail -----"
-            tail -n 250 "$GITHUB_WORKSPACE/logcat.txt"
-
-            if grep -qE "FATAL EXCEPTION|Process: com\.konative\.testapp.*has died" "$GITHUB_WORKSPACE/logcat.txt"; then
-              echo "::error::com.konative.testapp crashed on launch - see the uploaded logcat.txt artifact"
-              exit 1
-            fi
-            if grep -q "self-check FAILED" "$GITHUB_WORKSPACE/logcat.txt"; then
-              echo "::error::at least one real on-device self-check reported FAILED - see the uploaded logcat.txt artifact"
-              exit 1
-            fi
-            PASS_COUNT=$(grep -c "self-check PASSED" "$GITHUB_WORKSPACE/logcat.txt" || true)
-            echo "Self-checks PASSED: $PASS_COUNT (expect at least 8 - jni_onload.cpp's on_started())"
-            if [ "$PASS_COUNT" -lt 8 ]; then
-              echo "::error::expected at least 8 'self-check PASSED' lines in logcat, found $PASS_COUNT - on_started() likely never ran (native library failed to load, or install() never fired)"
-              exit 1
-            fi
+          script: bash "$GITHUB_WORKSPACE/.github/scripts/verify-emulator-run.sh"
 
       - name: Upload logcat + screenshot as evidence
         if: always()
