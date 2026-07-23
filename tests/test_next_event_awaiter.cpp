@@ -6,7 +6,9 @@
 // points at. Guarding the whole file rather than just the second TEST_CASE, since the first one
 // alone would give false confidence that NextEventAwaiter is GCC-safe when its actual core
 // value-returning behavior is the unverified, crashing part.
-#if defined(__clang__)
+#include "konative/core/detail/platform.hpp"
+
+#if KONATIVE_COMPILER_CLANG
 
 #include <coro/task.hpp>
 #include <doctest/doctest.h>
@@ -54,4 +56,4 @@ TEST_CASE("NextEventAwaiter: next() resumes with a copy of the actual fired even
     CHECK(received_value == 42);
 }
 
-#endif // defined(__clang__)
+#endif // KONATIVE_COMPILER_CLANG

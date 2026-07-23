@@ -16,9 +16,3 @@
 #else
 #define KONATIVE_COMPILER_CLANG 0
 #endif
-
-namespace konative::core::detail {
-
-inline constexpr bool kIsAndroid = KONATIVE_PLATFORM_ANDROID != 0;
-
-} // namespace konative::core::detail
