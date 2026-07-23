@@ -177,7 +177,20 @@ jobs:
       # [minSdk, targetSdk] (26..36 here).
       SDK_PLATFORM: "36"
       SDK_BUILD_TOOLS: "36.0.0"
-      NDK_VERSION: "r28c"
+      # testapp/app/build.gradle.kts declares this EXACT NDK revision as its own ndkVersion (its own
+      # comment: "matches CMakePresets.json's own android-* presets"), and AGP hard-validates the two
+      # against each other - [CXX1100] "android.ndkVersion is X but android.ndkPath ... refers to a
+      # different version Y" is a real, fatal configure-time error, not a warning, if they disagree
+      # even within the same r28 family (confirmed via a real first CI run: nttld/setup-ndk's own
+      # "r28c" resolves to 28.2.13676358, NOT this value - a genuine mismatch invisible on this
+      # project's own dev machine, which happens to already have exactly 28.0.13004108 installed).
+      # Pre-installing this exact package via setup-android below (pre-licensed, same mechanism as
+      # platforms;/build-tools; already use) and leaving konativeNdkPath unset lets AGP find and use
+      # it via its own ordinary SDK-managed-NDK discovery - no separate NDK-setup action needed for
+      # this job (unlike the sibling android-build job's standalone `cmake --preset` flow, which
+      # genuinely does need ANDROID_NDK_HOME as a real env var for CMakePresets.json's own $env{}
+      # macro - a different mechanism this Gradle-driven job doesn't use at all).
+      NDK_VERSION: "28.0.13004108"
       # Matches the API level already verified end-to-end on the local, physically-tested LDPlayer
       # x86_64 emulator (see the project-konative-testapp memory entry) - a known-good combination,
       # not a guess at what the hosted runner's own emulator images support.
@@ -207,16 +220,10 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK (platform ${{ env.SDK_PLATFORM }}, build-tools ${{ env.SDK_BUILD_TOOLS }})
+      - name: Set up Android SDK (platform ${{ env.SDK_PLATFORM }}, build-tools ${{ env.SDK_BUILD_TOOLS }}, NDK ${{ env.NDK_VERSION }})
         uses: android-actions/setup-android@v4
         with:
-          packages: "platform-tools platforms;android-${{ env.SDK_PLATFORM }} build-tools;${{ env.SDK_BUILD_TOOLS }}"
-
-      - name: Set up Android NDK
-        id: setup-ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: ${{ env.NDK_VERSION }}
+          packages: "platform-tools platforms;android-${{ env.SDK_PLATFORM }} build-tools;${{ env.SDK_BUILD_TOOLS }} ndk;${{ env.NDK_VERSION }}"
 
       - name: Download and verify the real kotlinc distribution
         uses: nick-fields/retry@v4
@@ -254,16 +261,18 @@ jobs:
             ./gradlew resolveKonativeClasspath --no-daemon
 
       - name: Build the real testapp/ debug APK via Gradle
-        # Mirrors testapp/README.md's own documented recipe exactly. konativeNdkPath is pinned to
-        # the same nttld/setup-ndk-provided r28c used by the android-build job above (deterministic,
-        # consistent across both jobs) rather than left to AGP's own SDK-managed NDK provisioning.
+        # Mirrors testapp/README.md's own documented recipe exactly, EXCEPT konativeNdkPath is
+        # deliberately left unset here (unlike a human's own machine-local override) - the exact
+        # matching NDK is now pre-installed via setup-android's own packages: list above (see this
+        # job's own NDK_VERSION comment for the real [CXX1100] failure this avoids), so AGP's
+        # ordinary SDK-managed-NDK discovery finds it on its own, no override needed on a runner
+        # whose SDK directory (unlike this project's own dev machine) isn't admin-only/read-only.
         # konativeR8/konativeJavac are left to KonativeEmbedKotlinDex.cmake's own auto-discovery,
         # same as android-build - neither has ever hit a real issue needing an explicit pin.
         run: |
           cd testapp
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           ./gradlew assembleDebug --no-daemon \
-            -PkonativeNdkPath="${{ steps.setup-ndk.outputs.ndk-path }}" \
             -PkonativeKotlinc="$KONATIVE_KOTLINC" \
             -PkonativeAndroidJar="$ANDROID_HOME/platforms/android-$SDK_PLATFORM/android.jar" \
             -PkonativeAapt2="$ANDROID_HOME/build-tools/$SDK_BUILD_TOOLS/aapt2" \
