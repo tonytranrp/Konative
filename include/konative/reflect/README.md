@@ -27,12 +27,13 @@ knowing about.
   it (not default-constructible, not an aggregate) should not be reflected — fix the type or don't
   reflect it, don't relax the concept to fit a type that doesn't belong in generic tooling.
 - **This module has one, specific, landed serialization capability — not a general opinion on
-  serialization formats.** `meta_glaze_json.hpp`'s `meta_component_to_json()` (2026-07-22) pairs a
-  reflected type with Glaze, but ONLY because it's driven entirely by `entt::meta`'s own runtime
-  registration data (the `kFieldNamePropId` property `reflect_component_auto<T>()` attaches, plus
-  `type.data()` enumeration) — it is not a generic "bring your own serialization format" mechanism,
-  and it currently only understands `int`/`float`/`bool`/`double` field values
-  (`meta_glaze_json.hpp`'s own `meta_value_to_json()`), returning an empty string for the whole
+  serialization formats.** `meta_glaze_json.hpp`'s `meta_component_to_json()`/
+  `meta_component_from_json<T>()` (2026-07-22, the read direction added same day) pair a reflected
+  type with Glaze, but ONLY because it's driven entirely by `entt::meta`'s own runtime registration
+  data (the `kFieldNamePropId` property `reflect_component_auto<T>()` attaches, plus `type.data()`
+  enumeration) — it is not a generic "bring your own serialization format" mechanism, and it
+  currently only understands `int`/`float`/`bool`/`double` field values (`meta_glaze_json.hpp`'s own
+  `meta_value_to_json()`/`json_value_to_meta()`), returning an empty string / `false` for the whole
   object if any field doesn't fit. Other pairings (e.g. cereal, which already has its own separate,
   unrelated mechanism via `entt::snapshot` — see `ecs/registry_snapshot_self_check.hpp`) stay out of
   scope for this module; don't assume a second serialization format belongs here just because Glaze

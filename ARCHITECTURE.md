@@ -781,6 +781,30 @@ genuine cross-toolchain bug this exact CI setup has caught this session alone, o
 code. `run_meta_glaze_json_self_check()` runs for real at every app startup and is confirmed
 passing on real hardware the same way.
 
+**Same day, the read direction landed too: `meta_component_from_json<T>()`.** Completes the round
+trip `KonativeDependencies.cmake`'s own dependency comment names as Glaze's actual reason for being
+chosen ("macro-free reflection-driven JSON, for config/hot-reload" - a config LOADER needs to read,
+not just write). Parses JSON via `glz::generic` (Glaze's dynamic-JSON type - fine to use for
+reading, since only its well-documented `operator[]`/`get<T>()`/`as<T>()`/`contains()` accessors
+are needed, unlike the undocumented object-construction API the write side deliberately avoided)
+and sets each field present in the JSON onto the real instance, matching Glaze's own "partial
+update" philosophy for fields the JSON simply doesn't mention. Two more real, non-obvious bugs
+found landing it: (1) a plain `entt::meta_any` parameter (`meta_component_to_json()`'s own
+signature) copy-constructs on assignment (confirmed directly against the vendored `meta.hpp`: its
+single-argument constructor forwards through `std::in_place_type<std::decay_t<Type>>`, decaying
+away any reference) - a write through one would silently target a temporary, never reaching the
+caller's real object, so `meta_component_from_json` is templated on a real `T&` instead, the same
+correctness reason as the `forward_as_meta()` lesson above, found proactively this time instead of
+by a failing test; (2) `glz::generic`'s `as<bool>()` is genuinely ambiguous between two real
+overloads (an exact-match `get<T>()` path, since `bool` is a real variant alternative, and a
+double-conversion path any int/float/bool could in principle take) - C++20's more-constrained-wins
+partial-ordering rule picks the double-conversion one, whose body calls `get<double>()` on a
+variant actually holding `bool`, throwing `std::bad_variant_access` at runtime (a real test
+failure, not caught by reasoning alone). Fixed by calling `get<bool>()` directly for that one field
+type, sidestepping the ambiguity entirely. The extended self-check (write, read into a fresh
+instance, and a partial-update case) is confirmed passing on real hardware the same way as every
+other self-check here.
+
 **The very first end-to-end
 milestone for this framework was exactly this: get a trivial Compose UI (a solid-color `Box`, real
 `BasicText` — see §6.6/§6.7) to actually render as `MainActivity`'s content view on a connected test

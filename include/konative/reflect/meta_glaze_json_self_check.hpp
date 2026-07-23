@@ -46,7 +46,12 @@ struct ParsedShape {
 // object string with the right keys and values, driven entirely by entt::meta's own runtime data -
 // this function never mentions GlazeSelfCheckComponent's field names as C++ identifiers; (2) the
 // resulting JSON string round-trips through Glaze's own glz::read_json() back into real,
-// concrete C++ values that match what was originally set.
+// concrete C++ values that match what was originally set; (3) meta_component_from_json() - the
+// read-side counterpart, closing the loop this module's dependency comment names Glaze for
+// ("config/hot-reload") - parses that SAME JSON back and genuinely mutates a real, DIFFERENT
+// instance's fields to match, again driven entirely by entt::meta's own runtime data; (4) a field
+// simply absent from the JSON is left untouched (Glaze's own documented "partial update"
+// philosophy), not zeroed or treated as an error.
 inline bool run_meta_glaze_json_self_check() {
     using namespace entt::literals;
     constexpr entt::id_type kId = entt::hashed_string{"konative::reflect::GlazeSelfCheckComponent"};
@@ -75,8 +80,34 @@ inline bool run_meta_glaze_json_self_check() {
     if (glz::read_json(parsed, json)) {
         return false; // a real Glaze parse error - the produced JSON was not valid/matching
     }
+    if (parsed.count != 7 || parsed.ratio != 2.5F || !parsed.enabled) {
+        return false;
+    }
 
-    return parsed.count == 7 && parsed.ratio == 2.5F && parsed.enabled == true;
+    // Now the read direction: a DIFFERENT real instance, deliberately starting from different
+    // values, restored from the SAME json captured above via meta_component_from_json() - proving
+    // the write genuinely reaches the real object (not a copy - see meta_component_from_json()'s
+    // own comment for why it's templated on T& specifically rather than entt::meta_any).
+    detail::GlazeSelfCheckComponent restored{};
+    restored.count = -1;
+    restored.ratio = -1.0F;
+    restored.enabled = false;
+    if (!meta_component_from_json(type, restored, json)) {
+        return false;
+    }
+    if (restored.count != 7 || restored.ratio != 2.5F || !restored.enabled) {
+        return false;
+    }
+
+    // Partial update: a JSON missing "enabled" entirely must leave it untouched, not reset it.
+    detail::GlazeSelfCheckComponent partial{};
+    partial.count = 0;
+    partial.ratio = 0.0F;
+    partial.enabled = true;
+    if (!meta_component_from_json(type, partial, R"({"count":42})")) {
+        return false;
+    }
+    return partial.count == 42 && partial.ratio == 0.0F && partial.enabled;
 }
 
 } // namespace konative::reflect
