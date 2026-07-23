@@ -322,7 +322,11 @@ jobs:
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            APK_PATH="$(find testapp/app/build -iname '*.apk' | head -n1)"
+            APK_PATH="$(find "$GITHUB_WORKSPACE/testapp/app/build" -iname '*.apk' | head -n1)"
+            if [ -z "$APK_PATH" ]; then
+              echo "::error::no .apk found under $GITHUB_WORKSPACE/testapp/app/build - the Gradle build step above should have produced one (see testapp/README.md's own 'Where the APK actually lands' note: the exact path is Gradle-version-dependent, this searches the whole tree rather than a fixed path)"
+              exit 1
+            fi
             echo "Installing $APK_PATH"
             adb install -t -r "$APK_PATH"
             adb logcat -c
