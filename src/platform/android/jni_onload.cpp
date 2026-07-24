@@ -23,6 +23,7 @@
 #include "konative/ecs/glm_storage_self_check.hpp"
 #include "konative/ecs/registry.hpp"
 #include "konative/ecs/registry_snapshot_self_check.hpp"
+#include "konative/ecs/snapshot_file.hpp"
 #include "konative/embed/checked_blob.hpp"
 #include "konative/events/input/KeyEvent.hpp"
 #include "konative/events/input/TouchDownEvent.hpp"
@@ -89,6 +90,14 @@ void serialize(Archive& archive, HeartbeatCounter& counter) {
 // been exercised against a real component in the real shipping app (confirmed by grep before
 // building this).
 constexpr entt::id_type kHeartbeatCounterReflectId = entt::hashed_string{"konative::HeartbeatCounter"};
+
+// Layout version stamped into the durable ECS state file's header (ecs/snapshot_file.hpp) - bump
+// this when the serialized component set (currently: the entity list + HeartbeatCounter's single
+// u64) changes shape, so a state file written by an older build is rejected cleanly as
+// kVersionMismatch instead of silently mis-parsed (cereal's binary archive is not self-describing;
+// the version header is the one honest lever against stale layouts - snapshot_file.hpp's own
+// comment).
+constexpr std::uint32_t kAppStateVersion = 1;
 
 // Registered via `world().systems().add()` in `on_started()` below - `SystemSequence::run()` calls
 // every registered system, in registration order, once per real `World::tick()` call (itself driven
@@ -361,6 +370,47 @@ public:
         // re-triggering it), so this call site specifically is a safe, one-time registration either way.
         konative::reflect::reflect_component<HeartbeatCounter>(kHeartbeatCounterReflectId);
 
+        // Durable state restore - the read half of the periodic snapshot on_tick() persists (see
+        // its background-thread write below): if a previous process's state file exists and
+        // validates (magic/version/payload - ecs/snapshot_file.hpp), the HeartbeatCounter entities
+        // are restored from it, tick counts and all, and the fresh-creation block below is skipped
+        // (the restored entities ARE those same entities - re-creating them would double the
+        // population). entt::snapshot_loader's own precondition needs the registry empty, which is
+        // genuinely true here: nothing above this point touches the world registry (every
+        // self-check uses its own scratch registry). kOpenFailed is the normal first boot, logged
+        // as info; anything else means a file EXISTS but couldn't be trusted - logged as an error,
+        // then started fresh anyway (read_snapshot_file's clear-on-failure guarantee makes that
+        // safe), and the next periodic snapshot simply overwrites the bad file.
+        bool restored_from_disk = false;
+        if (!config_directory_.empty()) {
+            state_file_path_ = config_directory_ + "/konative_state.bin";
+            auto restored = konative::ecs::read_snapshot_file<HeartbeatCounter>(
+                registry, state_file_path_, kAppStateVersion);
+            if (restored) {
+                restored_from_disk = true;
+                std::uint64_t restored_ticks = 0;
+                for (auto [entity, counter] : registry.view<HeartbeatCounter>().each()) {
+                    restored_ticks += counter.ticks;
+                }
+                konative::core::log_info(
+                    "KonativeAndroidApp: RESTORED {} entities from the previous process's state "
+                    "file at {} ({} combined HeartbeatCounter ticks carry over) - real durable ECS "
+                    "persistence, not an in-memory round-trip.",
+                    restored.value(), state_file_path_, restored_ticks);
+            } else if (restored.error() == konative::ecs::SnapshotFileError::kOpenFailed) {
+                konative::core::log_info(
+                    "KonativeAndroidApp: no ECS state file at {} yet - starting fresh (the normal "
+                    "first boot; the periodic snapshot below will create it).",
+                    state_file_path_);
+            } else {
+                konative::core::log_error(
+                    "KonativeAndroidApp: ECS state file at {} exists but could not be restored "
+                    "(SnapshotFileError {}) - starting fresh; the next periodic snapshot "
+                    "overwrites it.",
+                    state_file_path_, static_cast<int>(restored.error()));
+            }
+        }
+
         // Entity 0 is constructed through the REFLECTED path (entt::resolve() + the "emplace"
         // thunk), the exact mechanism a generic, reflection-driven consumer (editor "add component"
         // UI, deserialization) would use without ever naming HeartbeatCounter itself - proving
@@ -368,34 +418,39 @@ public:
         // test_reflect.cpp's own local Health type. Entities 1..N-1 use the normal direct
         // registry.emplace<T>() call, same as before - reflection is an additional, generic
         // construction path for tooling, not a replacement for everyday direct construction
-        // (reflect/README.md's own framing).
-        const konative::ecs::Entity reflected_entity = registry.create();
-        auto emplace_type = entt::resolve(kHeartbeatCounterReflectId);
-        auto emplace_func = emplace_type ? emplace_type.func(entt::hashed_string{"emplace"}) : entt::meta_func{};
-        const bool reflected_emplace_ok =
-            static_cast<bool>(emplace_func) &&
-            static_cast<bool>(
-                emplace_func.invoke({}, entt::forward_as_meta(registry), reflected_entity)) &&
-            registry.all_of<HeartbeatCounter>(reflected_entity);
-        if (reflected_emplace_ok) {
+        // (reflect/README.md's own framing). Skipped entirely after a successful state restore
+        // above (the entities already exist, counters intact) - which means a long-lived install
+        // only exercises this proof on its genuinely-first boot, while every desktop test run and
+        // every CI emulator run (always a fresh install) still exercises it every time.
+        if (!restored_from_disk) {
+            const konative::ecs::Entity reflected_entity = registry.create();
+            auto emplace_type = entt::resolve(kHeartbeatCounterReflectId);
+            auto emplace_func = emplace_type ? emplace_type.func(entt::hashed_string{"emplace"}) : entt::meta_func{};
+            const bool reflected_emplace_ok =
+                static_cast<bool>(emplace_func) &&
+                static_cast<bool>(
+                    emplace_func.invoke({}, entt::forward_as_meta(registry), reflected_entity)) &&
+                registry.all_of<HeartbeatCounter>(reflected_entity);
+            if (reflected_emplace_ok) {
+                konative::core::log_info(
+                    "KonativeAndroidApp: HeartbeatCounter constructed via the REFLECTED emplace-by-id "
+                    "path (entt::resolve + \"emplace\" thunk) for 1 entity - reflect_component<T>() "
+                    "confirmed working against a real app component.");
+            } else {
+                konative::core::log_error(
+                    "KonativeAndroidApp: reflected HeartbeatCounter construction FAILED - falling back "
+                    "to direct emplace for this entity so the rest of the ECS proof below still holds.");
+                registry.emplace_or_replace<HeartbeatCounter>(reflected_entity);
+            }
+            for (int i = 1; i < kHeartbeatEntityCount; ++i) {
+                registry.emplace<HeartbeatCounter>(registry.create());
+            }
             konative::core::log_info(
-                "KonativeAndroidApp: HeartbeatCounter constructed via the REFLECTED emplace-by-id "
-                "path (entt::resolve + \"emplace\" thunk) for 1 entity - reflect_component<T>() "
-                "confirmed working against a real app component.");
-        } else {
-            konative::core::log_error(
-                "KonativeAndroidApp: reflected HeartbeatCounter construction FAILED - falling back "
-                "to direct emplace for this entity so the rest of the ECS proof below still holds.");
-            registry.emplace_or_replace<HeartbeatCounter>(reflected_entity);
-        }
-        for (int i = 1; i < kHeartbeatEntityCount; ++i) {
-            registry.emplace<HeartbeatCounter>(registry.create());
+                "KonativeAndroidApp: {} real ECS entities created (each with a HeartbeatCounter "
+                "component), one real system registered to increment them every tick.",
+                kHeartbeatEntityCount);
         }
         world().systems().add(&increment_heartbeat_counters);
-        konative::core::log_info(
-            "KonativeAndroidApp: {} real ECS entities created (each with a HeartbeatCounter "
-            "component), one real system registered to increment them every tick.",
-            kHeartbeatEntityCount);
 
         // Resolves the other "defined since early on, never actually dispatched" open item:
         // events/input/Touch{Down,Move,Up}Event.hpp existed with nothing anywhere in the codebase
@@ -484,9 +539,11 @@ public:
             // world_.tick() (called before on_tick(), see Application::tick()) already ran
             // increment_heartbeat_counters this frame - reading the view here proves the real
             // Registry/View/System pipeline is genuinely operating, not just that emplace() didn't
-            // throw at startup: entity_count should read kHeartbeatEntityCount exactly, and
-            // total_heartbeat_ticks should read kHeartbeatEntityCount*tick_count_ exactly (every
-            // entity incremented once per tick, every tick, since on_started()).
+            // throw at startup: entity_count should read kHeartbeatEntityCount exactly, and on a
+            // FRESH start total_heartbeat_ticks reads kHeartbeatEntityCount*tick_count_ exactly
+            // (every entity incremented once per tick since on_started()); after a state-file
+            // restore it reads restored_base + kHeartbeatEntityCount*tick_count_ instead - the
+            // carried-over ticks are the whole point of durable persistence, not drift.
             std::uint64_t total_heartbeat_ticks = 0;
             std::size_t entity_count = 0;
             for (auto [entity, counter] : world().registry().view<HeartbeatCounter>().each()) {
@@ -518,8 +575,30 @@ public:
                     .get<konative::ecs::Entity>(archive)
                     .get<HeartbeatCounter>(archive);
             }
-            std::thread([bytes = buffer.str(), queue = &snapshot_queue_] {
-                queue->post(konative::events::persistence::SnapshotSavedEvent{bytes.size()});
+            // The background thread now does the real durable work the event's "Saved" name always
+            // promised: an atomic temp-file-then-rename write of the serialized bytes to the state
+            // file on_started() restores from (empty path = getFilesDir() failed at load - the
+            // in-memory pipeline still runs, persisted just stays false). tick_count_ doubles as
+            // the unique temp-file suffix - unique per snapshot by construction, so two still-
+            // running detached writers can never collide on one temp name. Logging from this
+            // thread is safe: core/log.hpp's sink is android_sink_mt, the mutex-protected variant.
+            std::thread([bytes = buffer.str(), queue = &snapshot_queue_, path = state_file_path_,
+                         unique = tick_count_] {
+                bool persisted = false;
+                if (!path.empty()) {
+                    auto written = konative::ecs::write_snapshot_bytes_file(bytes, path, unique,
+                                                                             kAppStateVersion);
+                    persisted = written.has_value();
+                    if (!written) {
+                        konative::core::log_error(
+                            "KonativeAndroidApp: periodic snapshot could NOT be persisted to {} "
+                            "(SnapshotFileError {}) - the in-memory snapshot itself still "
+                            "completed.",
+                            path, static_cast<int>(written.error()));
+                    }
+                }
+                queue->post(
+                    konative::events::persistence::SnapshotSavedEvent{bytes.size(), persisted});
             }).detach();
         }
         // Drains whatever the background thread(s) above have posted so far. World::tick() already
@@ -620,7 +699,9 @@ private:
     void on_snapshot_saved(const konative::events::persistence::SnapshotSavedEvent& event) {
         konative::core::log_info(
             "KonativeAndroidApp: SnapshotSavedEvent - a background thread serialized {} bytes of "
-            "real ECS state and reported back via CrossThreadEventQueue.", event.byte_size);
+            "real ECS state{} and reported back via CrossThreadEventQueue.", event.byte_size,
+            event.persisted_to_disk ? " AND persisted them durably to the state file"
+                                     : " (not persisted to disk this round - see the log above)");
     }
 
     // tick_log_interval/snapshot_interval_ticks now live in AppConfig (registry().ctx()), not here -
@@ -632,6 +713,9 @@ private:
     std::uint64_t touch_event_count_ = 0;
     std::string config_directory_;
     std::optional<konative::app::config::JsonConfigFile<konative::app::AppConfig>> config_file_;
+    // Set alongside the restore attempt in on_started(); empty = no usable files dir this process,
+    // so periodic snapshots stay in-memory-only (persisted_to_disk=false on every event).
+    std::string state_file_path_;
     konative::scheduling::CrossThreadEventQueue<konative::events::persistence::SnapshotSavedEvent> snapshot_queue_;
 };
 

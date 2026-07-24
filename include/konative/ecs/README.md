@@ -2,7 +2,10 @@
 
 Thin wrappers over `entt::registry` (`Registry`/`Entity`/`kNullEntity`), an ordered
 single-threaded `SystemSequence`, and `World` — the one-per-app-instance composition root (one
-`Registry`, one `SystemSequence`, one event `Dispatcher`).
+`Registry`, one `SystemSequence`, one event `Dispatcher`). Plus the durable-snapshot mechanics
+(`snapshot_file.hpp`: atomic state-file writes for already-serialized `entt::snapshot`+cereal
+bytes, and validated restore-on-startup — see its own top comment for the threading split and
+`ARCHITECTURE.md`'s status-table row for the on-device verification).
 
 ## Hard rules
 

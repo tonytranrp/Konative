@@ -95,12 +95,20 @@ TEST_CASE("WindowFocusChangedEvent carries focus state through the dispatcher") 
     CHECK(has_focus);
 }
 
-TEST_CASE("SnapshotSavedEvent carries the real serialized byte size through the dispatcher") {
+TEST_CASE("SnapshotSavedEvent carries the real serialized byte size and persistence outcome through the dispatcher") {
     konative::events::Dispatcher dispatcher;
-    std::size_t last_size = 0;
+    konative::events::persistence::SnapshotSavedEvent last{};
     dispatcher.sink<konative::events::persistence::SnapshotSavedEvent>().connect<
-        +[](std::size_t& out, const konative::events::persistence::SnapshotSavedEvent& e) { out = e.byte_size; }>(last_size);
+        +[](konative::events::persistence::SnapshotSavedEvent& out,
+            const konative::events::persistence::SnapshotSavedEvent& e) { out = e; }>(last);
 
-    dispatcher.trigger(konative::events::persistence::SnapshotSavedEvent{145516});
-    CHECK(last_size == 145516);
+    dispatcher.trigger(konative::events::persistence::SnapshotSavedEvent{145516, true});
+    CHECK(last.byte_size == 145516);
+    CHECK(last.persisted_to_disk);
+
+    // The single-field shape older producers used still aggregate-initializes - persisted_to_disk
+    // defaults false (the honest default: nothing proved a durable write happened).
+    dispatcher.trigger(konative::events::persistence::SnapshotSavedEvent{42});
+    CHECK(last.byte_size == 42);
+    CHECK_FALSE(last.persisted_to_disk);
 }
