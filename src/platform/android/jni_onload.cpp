@@ -43,7 +43,10 @@
 #include "konative/scheduling/spsc_event_queue_self_check.hpp"
 #include "konative/scheduling/taskflow_self_check.hpp"
 #include "konative/scheduling/thread_pool_self_check.hpp"
+#include "konative/spatial/approach.hpp"
+#include "konative/spatial/transform.hpp"
 #include "konative/spatial/transform_self_check.hpp"
+#include "konative/spatial/transform_serialize.hpp"
 
 extern "C" {
 extern const unsigned char konative_app_dex_start[];
@@ -84,6 +87,30 @@ void serialize(Archive& archive, HeartbeatCounter& counter) {
     archive(counter.ticks);
 }
 
+// spatial::Transform's first real consumer (spatial/README.md's own "no rendering or physics
+// consumer yet" caveat, closed): pairs with a Transform on ONE demo entity whose position a real
+// System (move_followers_toward_targets below) glides toward `target` every tick via
+// spatial::approach(). Touch input SETS the target (the first real EFFECT touch events have on ECS
+// state - until now they only incremented a counter), the first WindowResizedEvent centers the
+// initial target so the dot visibly glides to screen center on a fresh launch (that event's first
+// real effect too), and the Kotlin side reads the live position back per frame
+// (nativeGetFollowerX/Y) to place a real rendered Compose dot - C++ ECS spatial state driving
+// visible UI, the framework's actual value proposition, end to end.
+struct PointerFollow {
+    glm::vec3 target{0.0F, 0.0F, 0.0F};
+    // ~8 time constants per second: visibly smooth glide that settles in roughly a quarter
+    // second - demo-tuned, and genuinely overridable at runtime once a config need appears.
+    float approach_rate = 8.0F;
+};
+
+// Same ADL requirement as HeartbeatCounter's serialize() above - PointerFollow is part of the
+// durable snapshot (kAppStateVersion 2), so the dot's target survives a process kill along with
+// its Transform position.
+template <class Archive>
+void serialize(Archive& archive, PointerFollow& follow) {
+    archive(follow.target.x, follow.target.y, follow.target.z, follow.approach_rate);
+}
+
 // Lets on_started() below reflect HeartbeatCounter with konative::reflect::reflect_component<T>() -
 // include/konative/reflect/ (entt::meta registration + emplace-by-id thunk) had real desktop test
 // coverage (tests/test_reflect.cpp) but, unlike everything else this session wired up, had never
@@ -92,12 +119,16 @@ void serialize(Archive& archive, HeartbeatCounter& counter) {
 constexpr entt::id_type kHeartbeatCounterReflectId = entt::hashed_string{"konative::HeartbeatCounter"};
 
 // Layout version stamped into the durable ECS state file's header (ecs/snapshot_file.hpp) - bump
-// this when the serialized component set (currently: the entity list + HeartbeatCounter's single
-// u64) changes shape, so a state file written by an older build is rejected cleanly as
-// kVersionMismatch instead of silently mis-parsed (cereal's binary archive is not self-describing;
-// the version header is the one honest lever against stale layouts - snapshot_file.hpp's own
-// comment).
-constexpr std::uint32_t kAppStateVersion = 1;
+// this when the serialized component set changes shape, so a state file written by an older build
+// is rejected cleanly as kVersionMismatch instead of silently mis-parsed (cereal's binary archive
+// is not self-describing; the version header is the one honest lever against stale layouts -
+// snapshot_file.hpp's own comment).
+//
+// Version history: 1 = entity list + HeartbeatCounter. 2 = added spatial::Transform +
+// PointerFollow (the follower-dot demo entity) - the first REAL exercise of exactly the
+// stale-layout rejection this header was built for: a v1 file on an updated device is refused and
+// replaced, never mis-parsed.
+constexpr std::uint32_t kAppStateVersion = 2;
 
 // Registered via `world().systems().add()` in `on_started()` below - `SystemSequence::run()` calls
 // every registered system, in registration order, once per real `World::tick()` call (itself driven
@@ -107,6 +138,19 @@ constexpr std::uint32_t kAppStateVersion = 1;
 void increment_heartbeat_counters(konative::ecs::Registry& registry, float /*delta_seconds*/) {
     for (auto [entity, counter] : registry.view<HeartbeatCounter>().each()) {
         ++counter.ticks;
+    }
+}
+
+// The second real System in the shipping app, and the first one that consumes real spatial data:
+// glides every [Transform, PointerFollow] entity toward its target each frame via
+// spatial::approach() (exponential smoothing, frame-rate independent - that header's own contract,
+// desktop-tested). The per-entity MATH lives in spatial/ as a pure operation on Transform data;
+// only this registry-iterating shell is app code - exactly the data-vs-system split
+// spatial/README.md draws.
+void move_followers_toward_targets(konative::ecs::Registry& registry, float delta_seconds) {
+    for (auto [entity, transform, follow] :
+         registry.view<konative::spatial::Transform, PointerFollow>().each()) {
+        konative::spatial::approach(transform, follow.target, follow.approach_rate, delta_seconds);
     }
 }
 
@@ -384,8 +428,10 @@ public:
         bool restored_from_disk = false;
         if (!config_directory_.empty()) {
             state_file_path_ = config_directory_ + "/konative_state.bin";
-            auto restored = konative::ecs::read_snapshot_file<HeartbeatCounter>(
-                registry, state_file_path_, kAppStateVersion);
+            auto restored =
+                konative::ecs::read_snapshot_file<HeartbeatCounter, konative::spatial::Transform,
+                                                   PointerFollow>(registry, state_file_path_,
+                                                                   kAppStateVersion);
             if (restored) {
                 restored_from_disk = true;
                 std::uint64_t restored_ticks = 0;
@@ -451,6 +497,39 @@ public:
                 kHeartbeatEntityCount);
         }
         world().systems().add(&increment_heartbeat_counters);
+
+        // The follower-dot demo entity - spatial::Transform's first real consumer (see
+        // PointerFollow's own comment above for the full loop it closes). Find-or-create rather
+        // than create-unconditionally: after a successful v2 state restore above, the follower
+        // already exists WITH its live position/target (both components are in the snapshot - the
+        // dot genuinely stays where the user left it across a process kill); only a fresh start
+        // (or a restore from some future file that legitimately lacks one) creates it anew.
+        {
+            auto follower_view =
+                registry.view<konative::spatial::Transform, PointerFollow>();
+            follower_entity_ = follower_view.front();
+            if (follower_entity_ == konative::ecs::kNullEntity) {
+                follower_entity_ = registry.create();
+                registry.emplace<konative::spatial::Transform>(follower_entity_);
+                registry.emplace<PointerFollow>(follower_entity_);
+                konative::core::log_info(
+                    "KonativeAndroidApp: follower entity created (spatial::Transform + "
+                    "PointerFollow at origin) - awaiting the first WindowResizedEvent to aim for "
+                    "screen center, then live touch input.");
+            } else {
+                const auto& transform =
+                    registry.get<konative::spatial::Transform>(follower_entity_);
+                // A restored follower has a real, user-chosen position - treat its target as a
+                // user target so the first WindowResizedEvent below doesn't yank it back to
+                // center.
+                follower_has_user_target_ = true;
+                konative::core::log_info(
+                    "KonativeAndroidApp: follower entity RESTORED at position ({:.1f}, {:.1f}) - "
+                    "the dot persists where it was left, across the process kill.",
+                    transform.position.x, transform.position.y);
+            }
+        }
+        world().systems().add(&move_followers_toward_targets);
 
         // Resolves the other "defined since early on, never actually dispatched" open item:
         // events/input/Touch{Down,Move,Up}Event.hpp existed with nothing anywhere in the codebase
@@ -571,9 +650,14 @@ public:
             std::ostringstream buffer;
             {
                 cereal::BinaryOutputArchive archive(buffer);
+                // Component set + order must mirror on_started()'s read_snapshot_file call and
+                // kAppStateVersion's version history exactly - cereal binary has no per-component
+                // framing, the version header is what keeps a mismatch honest.
                 entt::snapshot{world().registry()}
                     .get<konative::ecs::Entity>(archive)
-                    .get<HeartbeatCounter>(archive);
+                    .get<HeartbeatCounter>(archive)
+                    .get<konative::spatial::Transform>(archive)
+                    .get<PointerFollow>(archive);
             }
             // The background thread now does the real durable work the event's "Saved" name always
             // promised: an atomic temp-file-then-rename write of the serialized bytes to the state
@@ -626,6 +710,15 @@ public:
     // deliberately skipped this process.
     void set_config_directory(std::string directory) { config_directory_ = std::move(directory); }
 
+    // The follower dot's live position for the Kotlin side's per-frame query
+    // (nativeGetFollowerX/Y, read from FrameTicker.doFrame() - the same main thread that mutates
+    // it, see tick_count()'s same-thread reasoning). Non-const because Application::world() only
+    // has a non-const accessor - a read-only overload would be a framework change no other caller
+    // needs yet. Returns origin on the (transient, startup-only) chance the entity doesn't exist
+    // yet - the UI just holds still, no error state to invent.
+    [[nodiscard]] float follower_x() { return follower_position().x; }
+    [[nodiscard]] float follower_y() { return follower_position().y; }
+
     // Real, public dispatch methods for the JNI trampolines below to call, instead of reaching into
     // world().events().trigger() directly from a free function - app/README.md's own Hard Rule
     // ("Application's on_* methods are the only extension point... does not reach into
@@ -658,14 +751,22 @@ private:
     // Logs every occurrence, unlike on_tick()'s periodic summary above - real touches are
     // discrete/user-paced (nowhere near 60-120Hz), so there's no flood risk, and seeing every one
     // (with its real coordinates) is exactly the point of a first on-device verification pass.
+    //
+    // Also touch's first real EFFECT on ECS state (until the follower entity existed, these
+    // handlers only counted): down/move both aim the follower at the touch point, so the dot
+    // chases a drag live. The coordinate spaces genuinely agree by construction - the touch
+    // positions arrive in the root Compose Box's own pixel space, and the Kotlin side places the
+    // dot via Modifier.offset in that exact same space.
     void on_touch_down(const konative::events::input::TouchDownEvent& event) {
         ++touch_event_count_;
+        aim_follower_at(event.x, event.y);
         konative::core::log_info(
             "KonativeAndroidApp: TouchDownEvent pointer={} x={:.1f} y={:.1f} (total touch events: {})",
             event.pointer_id, event.x, event.y, touch_event_count_);
     }
     void on_touch_move(const konative::events::input::TouchMoveEvent& event) {
         ++touch_event_count_;
+        aim_follower_at(event.x, event.y);
         konative::core::log_info(
             "KonativeAndroidApp: TouchMoveEvent pointer={} x={:.1f} y={:.1f} (total touch events: {})",
             event.pointer_id, event.x, event.y, touch_event_count_);
@@ -679,9 +780,20 @@ private:
 
     // Real window facts, discrete and rare (unlike per-frame ticks or user-paced touches) - logged
     // every occurrence, no counter/UI display needed for a first, on-device-verifiable proof.
+    //
+    // Also this event's first real EFFECT on ECS state: until the user has touched (or a restored
+    // follower carried its own position), the follower aims for screen center - so a fresh launch
+    // shows the dot visibly gliding from the origin to center, an at-a-glance "the C++ system is
+    // running" signal that needs no interaction at all.
     void on_window_resized(const konative::events::window::WindowResizedEvent& event) {
         konative::core::log_info("KonativeAndroidApp: WindowResizedEvent {}x{}", event.width,
                                   event.height);
+        if (!follower_has_user_target_ && world().registry().valid(follower_entity_) &&
+            world().registry().all_of<PointerFollow>(follower_entity_)) {
+            world().registry().get<PointerFollow>(follower_entity_).target =
+                glm::vec3{static_cast<float>(event.width) / 2.0F,
+                          static_cast<float>(event.height) / 2.0F, 0.0F};
+        }
     }
     void on_window_focus_changed(const konative::events::window::WindowFocusChangedEvent& event) {
         konative::core::log_info("KonativeAndroidApp: WindowFocusChangedEvent has_focus={}",
@@ -690,6 +802,26 @@ private:
     void on_key_event(const konative::events::input::KeyEvent& event) {
         konative::core::log_info("KonativeAndroidApp: KeyEvent key_code={} is_down={}",
                                   event.key_code, event.is_down);
+    }
+
+    // Shared by both touch handlers above: aims the follower and marks the target user-chosen
+    // (stops on_window_resized() re-centering it). z stays 0 - the UI is a 2D plane; the
+    // Transform's z axis is genuinely unused by this consumer, exactly the "2D usage is fully
+    // expressible" case spatial/README.md's 3D-shape Hard Rule anticipated.
+    void aim_follower_at(float x, float y) {
+        if (world().registry().valid(follower_entity_) &&
+            world().registry().all_of<PointerFollow>(follower_entity_)) {
+            follower_has_user_target_ = true;
+            world().registry().get<PointerFollow>(follower_entity_).target = glm::vec3{x, y, 0.0F};
+        }
+    }
+
+    [[nodiscard]] glm::vec3 follower_position() {
+        if (world().registry().valid(follower_entity_) &&
+            world().registry().all_of<konative::spatial::Transform>(follower_entity_)) {
+            return world().registry().get<konative::spatial::Transform>(follower_entity_).position;
+        }
+        return glm::vec3{0.0F, 0.0F, 0.0F};
     }
 
     // Delivered one frame after the background thread in on_tick() posts it (see that function's
@@ -716,6 +848,12 @@ private:
     // Set alongside the restore attempt in on_started(); empty = no usable files dir this process,
     // so periodic snapshots stay in-memory-only (persisted_to_disk=false on every event).
     std::string state_file_path_;
+    // The follower-dot demo entity (spatial::Transform + PointerFollow) - found-or-created in
+    // on_started(). follower_has_user_target_ gates on_window_resized()'s center-aiming default:
+    // false only until the first real touch (or a restored follower, which carries a user-chosen
+    // position by definition).
+    konative::ecs::Entity follower_entity_ = konative::ecs::kNullEntity;
+    bool follower_has_user_target_ = false;
     konative::scheduling::CrossThreadEventQueue<konative::events::persistence::SnapshotSavedEvent> snapshot_queue_;
 };
 
@@ -807,6 +945,19 @@ void JNICALL native_dispatch_touch_up(JNIEnv*, jclass, jint pointer_id, jfloat x
 // state" pattern as native_get_tick_count() above, for the new touch-event counter.
 jlong JNICALL native_get_touch_count(JNIEnv*, jclass) {
     return static_cast<jlong>(android_app().touch_event_count());
+}
+
+// Bound to KonativeEntryPoint.nativeGetFollowerX()/Y() - the same read-only query pattern as
+// tick/touch counts above, but for the first SPATIAL C++ state the UI renders: the follower dot's
+// live Transform position (see PointerFollow's comment for the whole loop). Two scalar queries
+// rather than one packed/array return, deliberately - matches the established one-value-per-method
+// convention here, and two jfloat calls per frame is nowhere near the point where marshalling
+// overhead would justify a new pattern.
+jfloat JNICALL native_get_follower_x(JNIEnv*, jclass) {
+    return static_cast<jfloat>(android_app().follower_x());
+}
+jfloat JNICALL native_get_follower_y(JNIEnv*, jclass) {
+    return static_cast<jfloat>(android_app().follower_y());
 }
 
 // Bound to KonativeEntryPoint.nativeDispatchWindowResized(Int, Int) - real producer is
@@ -945,6 +1096,16 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
             const_cast<char*>("nativeGetTouchCount"),
             const_cast<char*>("()J"),
             reinterpret_cast<void*>(&native_get_touch_count),
+        },
+        {
+            const_cast<char*>("nativeGetFollowerX"),
+            const_cast<char*>("()F"),
+            reinterpret_cast<void*>(&native_get_follower_x),
+        },
+        {
+            const_cast<char*>("nativeGetFollowerY"),
+            const_cast<char*>("()F"),
+            reinterpret_cast<void*>(&native_get_follower_y),
         },
         {
             const_cast<char*>("nativeDispatchWindowResized"),

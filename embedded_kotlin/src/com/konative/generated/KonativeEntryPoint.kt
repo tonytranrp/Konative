@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -35,7 +38,10 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -180,6 +186,17 @@ object KonativeEntryPoint {
     @JvmStatic
     external fun nativeGetTouchCount(): Long
 
+    // Same RegisterNatives contract, bound to native_get_follower_x/y - the first SPATIAL C++
+    // state the UI renders: the follower dot's live spatial::Transform position, updated every
+    // tick by a real C++ system (move_followers_toward_targets in jni_onload.cpp) gliding it
+    // toward the last touch point. Queried per frame from FrameTicker.doFrame() alongside the
+    // tick count, and rendered as a real Compose circle via Modifier.offset (see
+    // KonativeRootComposable below).
+    @JvmStatic
+    external fun nativeGetFollowerX(): Float
+    @JvmStatic
+    external fun nativeGetFollowerY(): Float
+
     // Same RegisterNatives contract, bound to native_dispatch_window_resized/
     // native_dispatch_window_focus_changed - real producers are KonativeRootComposable's
     // Modifier.onSizeChanged and a LaunchedEffect reading LocalWindowInfo.current.isWindowFocused
@@ -209,6 +226,14 @@ private var tickCountDisplay by mutableStateOf(0L)
 // tickCountDisplay above, for the same reason (written from the pointerInput pointer-event loop
 // below, which is real code, not composition).
 private var touchCountDisplay by mutableStateOf(0L)
+
+// Backs KonativeRootComposable's follower dot - the live position of the C++ spatial::Transform
+// the move_followers_toward_targets system updates every tick. Same object-scoped State shape as
+// tickCountDisplay above (written from FrameTicker.doFrame(), read inside the composable via
+// Modifier.offset's density lambda, which re-runs on state change without recomposing the whole
+// tree - the standard Compose idiom for per-frame position updates).
+private var followerXDisplay by mutableStateOf(0f)
+private var followerYDisplay by mutableStateOf(0f)
 
 // Mirrors jni_onload.cpp's own AndroidLifecycleEvent enum exactly - both sides must stay in sync.
 private object AndroidLifecycleEvent {
@@ -300,6 +325,8 @@ private object FrameTicker : Choreographer.FrameCallback {
         // real display refresh rate is the normal, lightweight case Compose is built for, and doing
         // it every frame is what makes this genuinely "live" rather than merely periodic.
         tickCountDisplay = queryTickCountFromNative()
+        followerXDisplay = queryFollowerXFromNative()
+        followerYDisplay = queryFollowerYFromNative()
         Choreographer.getInstance().postFrameCallback(this)
     }
 }
@@ -327,6 +354,29 @@ private fun queryTickCountFromNative(): Long {
             "queryTickCountFromNative: nativeGetTickCount unavailable - the UI will " +
                 "not show a live tick count; Compose rendering is otherwise unaffected.", e)
         tickCountDisplay
+    }
+}
+
+// Same try/catch-wrapped shape as queryTickCountFromNative() above, for the same reason - a
+// missing binding degrades to the dot holding its last position, never a crashed frame loop.
+private fun queryFollowerXFromNative(): Float {
+    return try {
+        KonativeEntryPoint.nativeGetFollowerX()
+    } catch (e: UnsatisfiedLinkError) {
+        logNativeBindingFailureOnce("queryFollowerXFromNative",
+            "queryFollowerXFromNative: nativeGetFollowerX unavailable - the follower dot " +
+                "will not move; Compose rendering is otherwise unaffected.", e)
+        followerXDisplay
+    }
+}
+private fun queryFollowerYFromNative(): Float {
+    return try {
+        KonativeEntryPoint.nativeGetFollowerY()
+    } catch (e: UnsatisfiedLinkError) {
+        logNativeBindingFailureOnce("queryFollowerYFromNative",
+            "queryFollowerYFromNative: nativeGetFollowerY unavailable - the follower dot " +
+                "will not move; Compose rendering is otherwise unaffected.", e)
+        followerYDisplay
     }
 }
 
@@ -532,6 +582,30 @@ private fun KonativeRootComposable() {
             },
         contentAlignment = Alignment.Center,
     ) {
+        // The follower dot - real Compose geometry placed by real C++ spatial state
+        // (spatial::Transform.position, glided toward the last touch by
+        // move_followers_toward_targets in jni_onload.cpp, queried per frame by FrameTicker).
+        // Aligned TopStart explicitly (the parent Box's contentAlignment = Center would otherwise
+        // re-anchor it) so the offset lambda's IntOffset is in the same top-left-origin pixel
+        // space the touch positions dispatched to C++ arrive in - the coordinate spaces agree by
+        // construction, no conversion anywhere. The offset() lambda overload (verified present in
+        // the vendored foundation-layout.jar via javap, like every Compose API used here) re-runs
+        // on state change during placement WITHOUT recomposing the tree - the idiomatic Compose
+        // shape for a per-frame-moving element. The half-size subtraction centers the 24dp circle
+        // ON the position rather than hanging it off the top-left corner.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .offset {
+                    val halfSizePx = 12.dp.roundToPx()
+                    IntOffset(
+                        followerXDisplay.roundToInt() - halfSizePx,
+                        followerYDisplay.roundToInt() - halfSizePx,
+                    )
+                }
+                .size(24.dp)
+                .background(Color(0xFFFFC107), CircleShape),
+        )
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             BasicText(
                 text = "Konative",
@@ -543,6 +617,10 @@ private fun KonativeRootComposable() {
             )
             BasicText(
                 text = "C++ touches: $touchCountDisplay",
+                style = TextStyle(color = Color.White, fontSize = 14.sp),
+            )
+            BasicText(
+                text = "C++ follower: (${followerXDisplay.roundToInt()}, ${followerYDisplay.roundToInt()})",
                 style = TextStyle(color = Color.White, fontSize = 14.sp),
             )
         }

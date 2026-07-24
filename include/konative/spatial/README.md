@@ -2,18 +2,22 @@
 
 Real ECS-side spatial data - `Transform` (`transform.hpp`), the component `ARCHITECTURE.md`
 section 4's dependency table names as GLM's actual reason for being chosen ("Math for ECS-side
-transforms/components"). `ecs/glm_storage_self_check.hpp`'s own `PackedTransformSelfCheckComponent`
-is a synthetic, self-check-only stand-in for GLM's packed-vec3-through-EnTT-storage question - not
-a real, reusable component. This module is the real one.
+transforms/components"), plus pure operations on it: `to_matrix()` (`transform.hpp`), `approach()`
+(`approach.hpp`, frame-rate-independent exponential glide toward a target), and opt-in cereal
+serialization (`transform_serialize.hpp` - a separate header so non-snapshotting consumers don't
+inherit cereal's include graph). `ecs/glm_storage_self_check.hpp`'s own
+`PackedTransformSelfCheckComponent` is a synthetic, self-check-only stand-in for GLM's
+packed-vec3-through-EnTT-storage question - not a real, reusable component. This module is the
+real one.
 
-**Status, honestly**: landed and self-checked (`transform_self_check.hpp`, real EnTT storage
-round-trip + hand-verified `to_matrix()` math), but has **no rendering or physics consumer yet** -
-the same honest "landed, tested, not yet wired to a real gameplay/rendering system" framing this
-codebase already uses for `events/window/WindowCreatedEvent.hpp`/`WindowDestroyedEvent.hpp`. This
-project's only current rendering surface (JVM-hosted Compose, `ARCHITECTURE.md` section 6.2) does
-its own 2D layout entirely in Kotlin and has no path that reads a C++-side `Transform` yet - wiring
-one up is real, separate, future work once an actual consumer needs it, not invented here just to
-claim "production usage."
+**Status**: landed, self-checked (`transform_self_check.hpp`, real EnTT storage round-trip +
+hand-verified `to_matrix()` math), and - as of 2026-07-23 - **consumed by a real, shipping,
+on-device-verified feature**: `jni_onload.cpp`'s follower-dot demo entity pairs `Transform` with a
+`PointerFollow` target, a real System glides it via `approach()` every tick, touch input aims it,
+the live position renders as a real Compose circle (`nativeGetFollowerX/Y`), and both components
+ride the durable snapshot (the dot survives a process kill at its exact position - see
+`ARCHITECTURE.md`'s status-table row for the verified evidence). The earlier "no consumer yet"
+caveat this paragraph used to carry is closed.
 
 ## Hard rules
 
