@@ -155,6 +155,17 @@ bool meta_component_from_json(entt::meta_type type, T& instance, const std::stri
         return false; // malformed JSON
     }
 
+    // A component is a JSON OBJECT - a document that parses fine but holds some other top-level
+    // value (a bare string, a number, an array) must be an error, not a silent "valid, zero
+    // fields present" no-op. Found empirically, not hypothetically (2026-07-23): a shell-quoting
+    // accident turned a config file into `"tick_log_interval":60 ...` - a bare top-level JSON
+    // STRING with trailing garbage - and glz::read_json accepted it, contains() then quietly
+    // matched nothing, and the caller reported a successful "reload" that changed no values.
+    // is_object() confirmed against the real vendored generic_fwd.hpp, not assumed.
+    if (!parsed.is_object()) {
+        return false;
+    }
+
     for (auto [id, data] : type.data()) {
         (void)id;
         entt::meta_prop name_prop = data.prop(detail::kFieldNamePropId);

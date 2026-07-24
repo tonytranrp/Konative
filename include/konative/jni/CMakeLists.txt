@@ -8,6 +8,7 @@ target_sources(konative_jni INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/ref.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/call.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dex_loader.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/files_dir.hpp
 )
 
 target_link_libraries(konative_jni INTERFACE konative::core)

@@ -55,6 +55,26 @@ TEST_CASE("AppConfig: a partial JSON override changes only the field present, ma
     CHECK(config.snapshot_interval_ticks == 300);    // left at its struct default - not an error
 }
 
+TEST_CASE("AppConfig: clamp_to_valid() forces both intervals to >= 1 - the on_tick() division-by-zero guard") {
+    // Both fields are `tick_count % interval` divisors in jni_onload.cpp's on_tick(), and both are
+    // now genuinely user-editable (config/json_config_file.hpp's real file) - a zero or negative
+    // value is a real input a config edit can produce, and unclamped it would be integer division
+    // by zero (real UB), not just a weird cadence.
+    konative::app::AppConfig config{};
+    config.tick_log_interval = 0;
+    config.snapshot_interval_ticks = -50;
+    konative::app::clamp_to_valid(config);
+    CHECK(config.tick_log_interval == 1);
+    CHECK(config.snapshot_interval_ticks == 1);
+
+    // Already-valid values pass through untouched.
+    config.tick_log_interval = 120;
+    config.snapshot_interval_ticks = 300;
+    konative::app::clamp_to_valid(config);
+    CHECK(config.tick_log_interval == 120);
+    CHECK(config.snapshot_interval_ticks == 300);
+}
+
 TEST_CASE("AppConfig: entt::registry::ctx() stores and retrieves it - the real DI mechanism ecs/world.hpp documents") {
     // world.hpp's own doc comment names registry().ctx() as Konative's intended cross-cutting-
     // service/DI mechanism ("register cross-cutting services via

@@ -1,7 +1,12 @@
 # include/konative/app/
 
 The `Application` base class (owns the one-per-process `ecs::World`) and the `create_application()`
-entry-point contract every Konative app implements exactly once.
+entry-point contract every Konative app implements exactly once. Also the application-level config
+surface: `app_config.hpp` (the reflected `AppConfig` component `jni_onload.cpp` stores in
+`registry().ctx()`, plus `clamp_to_valid()` - see its own comment for the real division-by-zero
+reason it exists) and `config/json_config_file.hpp` (`JsonConfigFile<T>`, the file-backed
+provision/load/hot-reload mechanism behind it - the real "config/hot-reload" purpose
+`KonativeDependencies.cmake` names for Glaze; see `ARCHITECTURE.md` §9's write-up).
 
 ## Hard rules
 

@@ -819,12 +819,34 @@ this codebase's first real call site for `entt::registry::ctx()` itself (`ecs/wo
 comment had named it as Konative's intended DI/composition-root mechanism since early in the
 project, with zero real usage anywhere until now). `on_tick()` reads `AppConfig` back out of
 `ctx()` every frame instead of a compile-time constant - a real, live, per-frame dependency lookup,
-not just a startup-time write. The JSON itself is still a compiled-in literal, not read from a real
-external file/asset yet - that remains a genuine, separate follow-up (Android asset, internal
-storage, or a future hot-reload channel), consistent with `KonativeDependencies.cmake`'s own
-"config/hot-reload" framing for why Glaze was chosen in the first place. Desktop-tested against the
-real `AppConfig` type directly (`tests/test_app_config.cpp`), not a synthetic stand-in, covering the
-default round trip, the exact partial-JSON shape `on_started()` uses, and real `ctx()` emplace/get.
+not just a startup-time write. Desktop-tested against the real `AppConfig` type directly
+(`tests/test_app_config.cpp`), not a synthetic stand-in, covering the default round trip, partial
+JSON, real `ctx()` emplace/get, and the `clamp_to_valid()` interval guard.
+
+**Then (2026-07-23): the "compiled-in literal" caveat closed for real -
+`app/config/json_config_file.hpp`'s `JsonConfigFile<T>` made `AppConfig` file-backed with live
+hot-reload**, completing the exact "config/hot-reload" purpose `KonativeDependencies.cmake`'s own
+comment names as Glaze's reason for being chosen. The config source is now a real file in the app's
+private internal storage (`Context.getFilesDir()`, resolved once in `JNI_OnLoad` via
+`jni/files_dir.hpp` - both JNI signatures javap-verified against the vendored `android.jar` first):
+a first run PROVISIONS the file from the struct defaults through the reflection WRITE path
+(`meta_component_to_json()`'s first real production call site - it only ever had test/self-check
+callers before), later runs load whatever the file holds, and `on_tick()` polls the file's mtime
+(one stat every 120 ticks, a full re-read only on a real change) and applies edits LIVE.
+`JsonConfigFile` guarantees a half-parsed edit can never tear the live value (parse into a copy,
+assign on full success only), records the failed mtime so a broken edit logs once per edit rather
+than once per poll, and self-heals when the file is fixed - no restart at any point. Verified on
+the real emulator end to end: provisioning, load-existing, a live cadence change (tick summaries
+moving from 120- to 60- to 240-frame intervals matching each edit), a broken edit logging exactly
+once while keeping the previous values, and a fixing edit recovering live. Two hardening findings
+landed with it, both from real usage rather than review: a user-editable interval needed clamping
+(`clamp_to_valid()`) because a zero/negative value would turn `on_tick()`'s `tick % interval`
+cadence checks into genuine integer division by zero, and `meta_component_from_json()` now rejects
+valid JSON whose top level isn't an OBJECT - found when a shell-quoting accident rewrote the config
+file as a bare top-level string with trailing garbage, which `glz::read_json` accepted and the
+field loop then silently matched nothing against, reporting success for garbage
+(`tests/test_meta_glaze_json.cpp` locks the rejection in, `tests/test_json_config_file.cpp` covers
+the whole file lifecycle on desktop against real files).
 
 **The very first end-to-end
 milestone for this framework was exactly this: get a trivial Compose UI (a solid-color `Box`, real

@@ -5,15 +5,19 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <sstream>
 #include <span>
+#include <string>
 #include <thread>
+#include <utility>
 
 #include <cereal/archives/binary.hpp>
 #include <jni.h>
 
 #include "konative/app/app_config.hpp"
 #include "konative/app/application.hpp"
+#include "konative/app/config/json_config_file.hpp"
 #include "konative/app/entry_point.hpp"
 #include "konative/core/log.hpp"
 #include "konative/ecs/glm_storage_self_check.hpp"
@@ -28,6 +32,7 @@
 #include "konative/events/window/WindowFocusChangedEvent.hpp"
 #include "konative/events/window/WindowResizedEvent.hpp"
 #include "konative/jni/dex_loader.hpp"
+#include "konative/jni/files_dir.hpp"
 #include "konative/reflect/meta_glaze_json.hpp"
 #include "konative/reflect/meta_glaze_json_self_check.hpp"
 #include "konative/reflect/meta_registry.hpp"
@@ -292,29 +297,58 @@ public:
         // exercised by their own self-check-only test types), and entt::registry::ctx()'s first
         // real call site (world.hpp's own doc comment names it as Konative's intended DI/
         // composition-root mechanism - "register cross-cutting services via
-        // registry().ctx().emplace<Service>(...)" - unused anywhere until now). A compiled-in
-        // default JSON string for now, not read from a real external file/asset - that's a real,
-        // separate follow-up (Android asset, internal storage, or a future hot-reload channel),
-        // not built here. Deliberately partial (only overrides tick_log_interval) to prove Glaze's
-        // documented "partial update" semantics for real: snapshot_interval_ticks is left at its
-        // struct default (300), not treated as a parse error for being absent from the JSON.
+        // registry().ctx().emplace<Service>(...)" - unused anywhere until now). The source is a
+        // REAL file in the app's private internal storage (config_directory_, resolved via
+        // Context.getFilesDir() in JNI_OnLoad - jni/files_dir.hpp), replacing the compiled-in JSON
+        // literal that used to sit here: a first run PROVISIONS the file from the struct's own
+        // defaults through the reflection WRITE path (meta_component_to_json's first real
+        // production call site - it only ever had test/self-check callers before), later runs load
+        // whatever the file holds (partial JSON keeps struct defaults for absent fields -
+        // meta_component_from_json's documented partial-update semantics, now genuinely reachable
+        // by a user editing the file), and on_tick() below polls its mtime for LIVE hot-reload -
+        // the "config/hot-reload" purpose KonativeDependencies.cmake's own comment names as
+        // Glaze's whole reason for being chosen, real end to end at last.
         constexpr entt::id_type kAppConfigReflectId = entt::hashed_string{"konative::app::AppConfig"};
         konative::reflect::reflect_component_auto<konative::app::AppConfig>(kAppConfigReflectId);
         konative::app::AppConfig app_config{};
-        constexpr const char* kDefaultAppConfigJson = R"({"tick_log_interval":180})";
-        const entt::meta_type app_config_type = entt::resolve(kAppConfigReflectId);
-        if (!konative::reflect::meta_component_from_json(app_config_type, app_config,
-                                                           kDefaultAppConfigJson)) {
+        if (!config_directory_.empty()) {
+            config_file_.emplace(config_directory_ + "/konative_config.json",
+                                 entt::resolve(kAppConfigReflectId));
+            switch (config_file_->load_or_provision(app_config)) {
+                case konative::app::config::LoadOutcome::kProvisionedNewFile:
+                    konative::core::log_info(
+                        "KonativeAndroidApp: AppConfig provisioned a NEW config file at {} from "
+                        "the struct defaults, via the reflection write path - edit it while the "
+                        "app keeps running to see a live hot-reload.",
+                        config_file_->path());
+                    break;
+                case konative::app::config::LoadOutcome::kLoadedExistingFile:
+                    konative::core::log_info(
+                        "KonativeAndroidApp: AppConfig loaded from the EXISTING config file at {}.",
+                        config_file_->path());
+                    break;
+                case konative::app::config::LoadOutcome::kFailed:
+                    konative::core::log_error(
+                        "KonativeAndroidApp: AppConfig could not be loaded from or provisioned at "
+                        "{} - running on the struct's compiled-in defaults. The mtime poll keeps "
+                        "watching: a fixing edit still hot-reloads live, no restart needed.",
+                        config_file_->path());
+                    break;
+            }
+        } else {
             konative::core::log_error(
-                "KonativeAndroidApp: AppConfig JSON parse failed - falling back to the struct's own "
-                "compiled-in defaults (tick_log_interval={}, snapshot_interval_ticks={}).",
-                app_config.tick_log_interval, app_config.snapshot_interval_ticks);
+                "KonativeAndroidApp: no config directory was resolved (Context.getFilesDir() "
+                "failed in JNI_OnLoad) - AppConfig runs on compiled-in struct defaults; no config "
+                "file, no hot-reload, this process.");
         }
+        // A user-editable file is a real input - see clamp_to_valid()'s own comment for why an
+        // unclamped zero/negative interval would be genuine UB in on_tick()'s cadence checks.
+        konative::app::clamp_to_valid(app_config);
         registry.ctx().emplace<konative::app::AppConfig>(app_config);
         konative::core::log_info(
-            "KonativeAndroidApp: AppConfig loaded via entt::meta + Glaze JSON "
-            "(tick_log_interval={}, snapshot_interval_ticks={}) and stored in registry().ctx() - "
-            "real reflection-driven config, not a synthetic self-check.",
+            "KonativeAndroidApp: AppConfig active (tick_log_interval={}, "
+            "snapshot_interval_ticks={}) - stored in registry().ctx(), re-read from there every "
+            "frame by on_tick().",
             app_config.tick_log_interval, app_config.snapshot_interval_ticks);
 
         // reflect_component<T>()'s registration context is process-global, not per-call. Re-running
@@ -413,6 +447,38 @@ public:
     // read path, not just at the one on_started() write above.
     void on_tick(float delta_seconds) override {
         ++tick_count_;
+
+        // Live config hot-reload: one mtime stat every kConfigPollIntervalTicks frames (~2s at
+        // 60Hz - latency a human editing the file perceives as immediate, cost invisible next to
+        // the frame loop), a full re-read only when the file genuinely changed.
+        // JsonConfigFile::poll_reload() itself guarantees the live value is never torn by a
+        // half-parsed edit (it parses into a copy and assigns only on full success). Runs BEFORE
+        // this frame's own app_config read below, so an edit takes effect the same frame it's
+        // noticed, not one poll interval later.
+        if (config_file_ && tick_count_ % kConfigPollIntervalTicks == 0) {
+            auto& live_config = world().registry().ctx().get<konative::app::AppConfig>();
+            switch (config_file_->poll_reload(live_config)) {
+                case konative::app::config::PollOutcome::kReloaded:
+                    konative::app::clamp_to_valid(live_config); // same UB guard as on_started()
+                    konative::core::log_info(
+                        "KonativeAndroidApp: AppConfig HOT-RELOADED from {} "
+                        "(tick_log_interval={}, snapshot_interval_ticks={}) - applied live, no "
+                        "restart.",
+                        config_file_->path(), live_config.tick_log_interval,
+                        live_config.snapshot_interval_ticks);
+                    break;
+                case konative::app::config::PollOutcome::kFailed:
+                    konative::core::log_error(
+                        "KonativeAndroidApp: AppConfig file at {} changed but could not be parsed "
+                        "- keeping the previous values. Fix the file to hot-reload; this logs once "
+                        "per actual edit, not once per poll.",
+                        config_file_->path());
+                    break;
+                case konative::app::config::PollOutcome::kUnchanged:
+                    break;
+            }
+        }
+
         const auto& app_config = world().registry().ctx().get<konative::app::AppConfig>();
         if (tick_count_ % static_cast<std::uint64_t>(app_config.tick_log_interval) == 0) {
             // world_.tick() (called before on_tick(), see Application::tick()) already ran
@@ -473,6 +539,13 @@ public:
     // Same same-thread reasoning as tick_count() above - real touch dispatch (native_dispatch_touch_*
     // below) and this read both happen on the Activity's main/UI thread only.
     [[nodiscard]] std::uint64_t touch_event_count() const { return touch_event_count_; }
+
+    // Called once from JNI_OnLoad (System.loadLibrary()'s thread - the same main thread every
+    // lifecycle/tick call arrives on, see tick_count()'s same-thread reasoning), BEFORE install()
+    // hands control to Kotlin - so on_started() above can never run with this still unset; an
+    // empty value means getFilesDir() resolution genuinely failed and file-backed config is
+    // deliberately skipped this process.
+    void set_config_directory(std::string directory) { config_directory_ = std::move(directory); }
 
     // Real, public dispatch methods for the JNI trampolines below to call, instead of reaching into
     // world().events().trigger() directly from a free function - app/README.md's own Hard Rule
@@ -553,8 +626,12 @@ private:
     // tick_log_interval/snapshot_interval_ticks now live in AppConfig (registry().ctx()), not here -
     // see on_started()'s real AppConfig load and on_tick()'s per-frame ctx() read above.
     static constexpr int kHeartbeatEntityCount = 3;
+    // ~2s at 60Hz between config-file mtime stats - see on_tick()'s hot-reload block.
+    static constexpr std::uint64_t kConfigPollIntervalTicks = 120;
     std::uint64_t tick_count_ = 0;
     std::uint64_t touch_event_count_ = 0;
+    std::string config_directory_;
+    std::optional<konative::app::config::JsonConfigFile<konative::app::AppConfig>> config_file_;
     konative::scheduling::CrossThreadEventQueue<konative::events::persistence::SnapshotSavedEvent> snapshot_queue_;
 };
 
@@ -812,6 +889,25 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
             "show live tick/touch counts. Compose rendering is otherwise unaffected (these native "
             "methods are unrelated to install()'s own handoff below); Kotlin's own call sites are "
             "individually try/caught for exactly this case, see KonativeEntryPoint.kt.");
+    }
+
+    // Step 5.7: resolve the app's private internal-storage directory (Context.getFilesDir(), via
+    // the same Application object dex_loader already holds) and hand it to the Application
+    // singleton BEFORE install() below - install() registers the ActivityLifecycleCallbacks that
+    // eventually fire on_started(), which is where the path gets used (the file-backed AppConfig),
+    // so this ordering means on_started() can never observe a not-yet-set path. Non-fatal on
+    // failure, same convention as the resources blob and RegisterNatives above: an empty path just
+    // means AppConfig runs on compiled-in struct defaults with no config file and no hot-reload
+    // this process (KonativeAndroidApp::on_started() logs that case itself).
+    auto files_dir = konative::jni::get_files_dir_path(env, loaded.value().application.get());
+    if (files_dir) {
+        android_app().set_config_directory(std::move(files_dir.value()));
+    } else {
+        konative::core::log_error(
+            "JNI_OnLoad: Context.getFilesDir() could not be resolved (FilesDirError {}) - "
+            "AppConfig will run on compiled-in defaults (no config file, no hot-reload) this "
+            "process.",
+            static_cast<int>(files_dir.error()));
     }
 
     // Step 6: ONE handoff call, then native code is done - everything past this point (Compose

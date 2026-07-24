@@ -1,7 +1,9 @@
 # include/konative/jni/
 
-JNI reference-counting and call helpers, plus the embedded-dex class loader — the mechanics behind
-`ARCHITECTURE.md` section 6.4/6.6's `JNI_OnLoad`-to-loaded-Compose-class bridge. Ported from
+JNI reference-counting and call helpers, the embedded-dex class loader, and small Android-API
+lookups native code genuinely needs (`files_dir.hpp`'s `getFilesDir()` resolution, feeding the
+file-backed `AppConfig`) — the mechanics behind `ARCHITECTURE.md` section 6.4/6.6's
+`JNI_OnLoad`-to-loaded-Compose-class bridge. Ported from
 `GameHub`'s real, working `libs/jni/` (see each file's own top comment for the exact source), not
 reinvented — `ref.hpp`'s `LocalRef`/`GlobalRef` and `call.hpp`'s call helpers are GameHub's own
 design, adapted to be fully inline and to use this project's own `Result<T, E>`/logging

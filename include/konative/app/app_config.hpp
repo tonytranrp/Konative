@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 // Real runtime configuration for a Konative Application instance - the first real, non-synthetic
 // consumer of the entt::meta + Boost.PFR auto-registration and entt::meta + Glaze JSON pairings
 // (reflect/pfr_auto_registration.hpp, reflect/meta_glaze_json.hpp), which until now had only ever
@@ -23,5 +25,17 @@ struct AppConfig {
     int tick_log_interval = 120;       // KonativeAndroidApp::on_tick()'s periodic summary cadence
     int snapshot_interval_ticks = 300; // KonativeAndroidApp::on_tick()'s periodic snapshot cadence
 };
+
+// Clamps both intervals to >= 1. Both are used as `tick_count % interval` divisors in
+// KonativeAndroidApp::on_tick() - and since config/json_config_file.hpp made AppConfig genuinely
+// user-editable (a real file in the app's internal storage, hot-reloaded live), a zero or negative
+// value is a real input someone can type, not a can't-happen: unclamped, it would be integer
+// division by zero, real UB, a crash a config edit should never be able to cause. A free function,
+// not a member - components stay plain data with behavior expressed separately, the same
+// convention as spatial::to_matrix() (spatial/README.md's own Hard Rule shape).
+inline void clamp_to_valid(AppConfig& config) {
+    config.tick_log_interval = std::max(config.tick_log_interval, 1);
+    config.snapshot_interval_ticks = std::max(config.snapshot_interval_ticks, 1);
+}
 
 } // namespace konative::app
