@@ -6,6 +6,7 @@
 add_subdirectory(core)
 add_subdirectory(reflect)
 add_subdirectory(ecs)
+add_subdirectory(spatial)
 add_subdirectory(events)
 add_subdirectory(scheduling)
 add_subdirectory(interop)
@@ -22,6 +23,7 @@ target_link_libraries(konative INTERFACE
   konative::core
   konative::reflect
   konative::ecs
+  konative::spatial
   konative::events
   konative::scheduling
   konative::interop

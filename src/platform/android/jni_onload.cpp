@@ -37,6 +37,7 @@
 #include "konative/scheduling/spsc_event_queue_self_check.hpp"
 #include "konative/scheduling/taskflow_self_check.hpp"
 #include "konative/scheduling/thread_pool_self_check.hpp"
+#include "konative/spatial/transform_self_check.hpp"
 
 extern "C" {
 extern const unsigned char konative_app_dex_start[];
@@ -261,6 +262,23 @@ public:
                 "KonativeAndroidApp: entt::meta + Glaze JSON self-check FAILED on this device/ABI. "
                 "Nothing else in this app currently depends on this, but confirms a real problem on "
                 "this specific target.");
+        }
+
+        // spatial::Transform + to_matrix() - ARCHITECTURE.md section 4's own "GLM for ECS-side
+        // transforms/components" framing, the actual reason GLM was chosen, unresolved until now
+        // (glm_storage_self_check.hpp's own PackedTransformSelfCheckComponent is a synthetic
+        // stand-in, not the real component). Same permanent regression-guard-at-real-startup
+        // pattern as every other self-check here.
+        bool transform_ok = konative::spatial::run_transform_self_check();
+        if (transform_ok) {
+            konative::core::log_info(
+                "KonativeAndroidApp: spatial::Transform self-check PASSED on this device/ABI - "
+                "real EnTT storage round-trip and to_matrix() composition confirmed correct.");
+        } else {
+            konative::core::log_error(
+                "KonativeAndroidApp: spatial::Transform self-check FAILED on this device/ABI. "
+                "Nothing else in this app currently depends on this yet, but confirms a real "
+                "problem on this specific target.");
         }
 
         // Real ECS proof, the one piece Dispatcher/events + the tick driver + Taskflow above didn't
