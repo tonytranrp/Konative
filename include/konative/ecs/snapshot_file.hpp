@@ -146,6 +146,8 @@ core::Result<std::size_t, SnapshotFileError> read_snapshot_file(Registry& regist
     return R::ok(detail::alive_entity_count(registry));
 }
 
+namespace detail {
+
 // The write-side counterpart to read_snapshot_file<Components...>() above, and the reason
 // SnapshotComponents<Tuple> below exists at all: a deep-review audit pass (2026-07-25) found that
 // this codebase's own write call site (a hand-written entt::snapshot{}.get<A>(archive).get<B>
@@ -159,10 +161,18 @@ core::Result<std::size_t, SnapshotFileError> read_snapshot_file(Registry& regist
 // Mirrors read_snapshot_file's own `(loader.get<Components>(archive), ...)` fold exactly, just for
 // the write side - entt::snapshot::get<Type>() returns *this for chaining, so the fold expression
 // over the comma operator chains identically to writing them out by hand.
+//
+// detail-scoped, not public, like this namespace's own alive_entity_count() above - a repo-wide
+// grep (a follow-up sweep, 2026-07-25) confirmed the only real call site anywhere is
+// SnapshotComponents<Tuple>::write() below; unlike read_snapshot_file<Components...>() (which
+// desktop tests call directly, earning its public top-level placement), nothing has a reason to
+// call this one directly instead of through the tuple wrapper.
 template <typename... Components>
 void write_components_to_snapshot(entt::snapshot& snapshot, cereal::BinaryOutputArchive& archive) {
     (snapshot.get<Components>(archive), ...);
 }
+
+} // namespace detail
 
 // A single source of truth for a durable snapshot's component set: define ONE
 // `using MyComponents = std::tuple<A, B, C>;` alias at the call site and use
@@ -179,7 +189,7 @@ struct SnapshotComponents;
 template <typename... Components>
 struct SnapshotComponents<std::tuple<Components...>> {
     static void write(entt::snapshot& snapshot, cereal::BinaryOutputArchive& archive) {
-        write_components_to_snapshot<Components...>(snapshot, archive);
+        detail::write_components_to_snapshot<Components...>(snapshot, archive);
     }
 
     static core::Result<std::size_t, SnapshotFileError> read(Registry& registry,

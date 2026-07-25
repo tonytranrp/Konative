@@ -26,9 +26,10 @@ caveat this paragraph used to carry is closed.
   Nothing in this codebase has a real, current need for nested transforms - hierarchy is a real,
   separate design decision (world-space caching, dirty-flag propagation, cycle prevention) worth
   making when a real consumer actually needs it, matching this project's established "no driving
-  need, don't build it speculatively" discipline (`ecs/registry.hpp`'s own `kNullEntity` is the
-  same shape of restraint). Don't add hierarchy fields here without a real, concrete consumer
-  driving the decision.
+  need, don't build it speculatively" discipline (`ecs/registry.hpp`'s own `kNullEntity` sat
+  dormant under this same restraint for months before the follower-dot entity gave it its first
+  real production use - proof the discipline pays off, not just permanent deferral). Don't add
+  hierarchy fields here without a real, concrete consumer driving the decision.
 - **3D position/rotation/scale (`glm::vec3`/`glm::quat`/`glm::vec3`), not a narrower 2D-only
   shape.** This is the standard, conventional ECS Transform layout (Unity, Godot, Bevy all use
   exactly this) - even though the one real consumer that exists today (the follower-dot demo, see

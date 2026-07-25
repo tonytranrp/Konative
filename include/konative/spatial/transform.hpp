@@ -21,9 +21,11 @@
 //
 // Deliberately NO hierarchy (no parent entity/component, no local-vs-world distinction) - matching
 // this project's own established "no real driving need, don't build it speculatively" discipline
-// (the same reasoning ecs/registry.hpp's own kNullEntity was left unwired for). Hierarchy is a
-// real, separate design decision (world-space caching, dirty-flag propagation, cycle prevention)
-// worth making when a real consumer actually needs nested transforms, not preemptively.
+// (the same restraint ecs/registry.hpp's own kNullEntity was left dormant under for months before
+// the follower-dot entity gave it its first real production use - proof the discipline pays off
+// rather than just deferring work forever). Hierarchy is a real, separate design decision
+// (world-space caching, dirty-flag propagation, cycle prevention) worth making when a real
+// consumer actually needs nested transforms, not preemptively.
 namespace konative::spatial {
 
 struct Transform {
