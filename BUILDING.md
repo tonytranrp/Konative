@@ -27,10 +27,14 @@ to `main` — a real, hosted-runner check for exactly what this doc's own Quick 
 `android-x86_64`): a real SDK/NDK/kotlinc set up fresh on the runner (not assumed pre-installed),
 and `tools/kotlin-classpath-resolver/` (see that folder's own README.md) standing in for
 `CMakeUserPresets.json`'s machine-local toolchain paths, confirming a real `libkonative_app_native.so`
-builds and links. It's build-only, not an on-device/rendering check the way the desktop suite
-actually runs its tests — when `ARCHITECTURE.md` says something is "verified in CI," it still means
-`desktop-tests.yml`'s test suite specifically, not the Android build workflow, unless stated
-otherwise.
+builds and links. **Update (2026-07-25, this line was stale)**: the workflow now has a second job too,
+`android-emulator-verify` — it builds the real `testapp/` APK via Gradle, boots a real hardware-
+accelerated x86_64 emulator, installs and launches the app, and fails the job on a crash or any
+on-device self-check reporting `FAILED` in logcat (`ARCHITECTURE.md` section 6.7's status table has
+the full account). So "verified in CI" for anything Android-side now legitimately can mean either
+job — the build-only leg (cross-compilation correctness) or the emulator-verify leg (real on-device
+behavior) — check which one a given claim actually cites rather than assuming build-only by default,
+the way this line used to imply.
 
 ## Troubleshooting — real, reproduced issues and their fixes
 
