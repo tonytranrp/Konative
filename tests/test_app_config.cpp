@@ -73,10 +73,10 @@ TEST_CASE("AppConfig: clamp_to_valid() floors both intervals at their real safe 
     // A value already above the floor but still small (e.g. an aggressive but not pathological
     // hot-reload edit) passes through untouched - clamping is a safety floor, not a re-quantization.
     config.tick_log_interval = 15;
-    config.snapshot_interval_ticks = 45;
+    config.snapshot_interval_ticks = 75;
     konative::app::clamp_to_valid(config);
     CHECK(config.tick_log_interval == 15);
-    CHECK(config.snapshot_interval_ticks == 45);
+    CHECK(config.snapshot_interval_ticks == 75);
 
     // Already-valid struct-default values pass through untouched.
     config.tick_log_interval = 120;
