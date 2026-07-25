@@ -162,7 +162,7 @@ TEST_CASE("JsonConfigFile: loading an existing broken file fails, keeps defaults
     konative::app::config::JsonConfigFile<konative::app::AppConfig> file(path.string(),
                                                                           app_config_meta_type());
     konative::app::AppConfig config{};
-    REQUIRE(file.load_or_provision(config) == konative::app::config::LoadOutcome::kFailed);
+    REQUIRE(file.load_or_provision(config) == konative::app::config::LoadOutcome::kParseFailed);
     CHECK(config.tick_log_interval == 120); // untouched - struct defaults still in force
     CHECK(config.snapshot_interval_ticks == 300);
 
@@ -181,6 +181,6 @@ TEST_CASE("JsonConfigFile: provisioning into a nonexistent directory fails clean
     konative::app::config::JsonConfigFile<konative::app::AppConfig> file(path.string(),
                                                                           app_config_meta_type());
     konative::app::AppConfig config{};
-    CHECK(file.load_or_provision(config) == konative::app::config::LoadOutcome::kFailed);
+    CHECK(file.load_or_provision(config) == konative::app::config::LoadOutcome::kProvisionFailed);
     CHECK(config.tick_log_interval == 120); // untouched either way
 }

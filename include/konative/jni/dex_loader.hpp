@@ -72,6 +72,18 @@ inline LocalRef<jobject> upgrade_to_resource_aware_loader(JNIEnv* env, jobject b
     jmethodID load_class_method =
         env->GetMethodID(loader_class.get(), "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
     loader_class.reset();
+    // A real, pre-existing gap this module's own Hard Rule (jni/README.md: "check_and_clear_
+    // exception() after every JNI call that can throw, before any further JNI call") explicitly
+    // forbids - found by a deep-review audit pass (2026-07-25) via direct comparison against this
+    // same file's OTHER GetMethodID call sites (e.g. the InMemoryDexClassLoader ctor lookup below),
+    // all of which already check. loadClass is a foundational java.lang.ClassLoader method, always
+    // present in practice, so this was never observed to fail - but calling CallObjectMethod with a
+    // null jmethodID (the real JNI-spec outcome if GetMethodID ever did fail) is undefined behavior,
+    // not a graceful failure, so this needed a real check regardless of how unreachable it seemed.
+    if (check_and_clear_exception(env, "GetMethodID(ClassLoader.loadClass)") ||
+        load_class_method == nullptr) {
+        return LocalRef<jobject>(env, env->NewLocalRef(bootstrap_loader));
+    }
     LocalRef<jobject> provider_class(
         env, env->CallObjectMethod(bootstrap_loader, load_class_method, provider_name.get()));
     if (env->ExceptionCheck()) {

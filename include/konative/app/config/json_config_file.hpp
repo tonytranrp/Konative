@@ -28,12 +28,24 @@
 // drain-per-tick design.
 namespace konative::app::config {
 
-// What load_or_provision() actually did - three genuinely different situations the caller (which
-// owns logging policy - this header never logs) reports differently.
+// What load_or_provision() actually did. kProvisionFailed vs kParseFailed is a real, actionable
+// distinction a deep-review audit pass (2026-07-25) found this enum used to erase: the original
+// single kFailed conflated FOUR structurally different causes (an exists()-check error, the
+// instance's own values failing to survive the reflection write path, the provisioning write
+// itself failing, and an EXISTING file failing to parse) into one value, so a field engineer
+// reading a log line genuinely could not tell "this device's storage is exhausted" from "someone
+// typed bad JSON" without physically inspecting the file - which may not even be possible on a
+// non-debuggable release build. The first three are all filesystem-level problems encountered
+// while trying to CREATE a file that didn't exist; the fourth is a content-level problem with a
+// file that DOES exist - genuinely different failure classes an operator would act on differently.
 enum class LoadOutcome {
     kProvisionedNewFile, // no file existed; the instance's current values were written as the new file
     kLoadedExistingFile, // a file existed and parsed cleanly; instance now holds its values
-    kFailed,             // a file existed but couldn't be read/parsed, or provisioning couldn't write
+    kProvisionFailed,    // no file existed, and creating one failed - a filesystem-level problem
+                         // (the exists() check itself errored, the instance's current values
+                         // couldn't be serialized, or the write failed), not a content problem
+    kParseFailed,        // a file EXISTS but couldn't be parsed - a content-level problem (bad
+                         // JSON, wrong field types), not a filesystem problem
 };
 
 // What poll_reload() actually did. kUnchanged is the overwhelmingly common case (nothing to do);
@@ -74,23 +86,23 @@ public:
     // `instance` (partial JSON is fine - absent fields keep whatever `instance` already holds,
     // meta_component_from_json's own documented partial-update semantics).
     //
-    // On kFailed the file's mtime is still recorded, so a subsequent poll_reload() doesn't
+    // On kParseFailed the file's mtime is still recorded, so a subsequent poll_reload() doesn't
     // immediately re-fail on the exact same unchanged content - only a real, new edit re-triggers
     // a parse attempt. `instance` is left untouched on any failure.
     LoadOutcome load_or_provision(T& instance) {
         std::error_code ec;
         const bool file_exists = std::filesystem::exists(path_, ec);
         if (ec) {
-            return LoadOutcome::kFailed;
+            return LoadOutcome::kProvisionFailed;
         }
 
         if (!file_exists) {
             const std::string json = konative::reflect::meta_component_to_json(type_, instance);
             if (json.empty()) {
-                return LoadOutcome::kFailed;
+                return LoadOutcome::kProvisionFailed;
             }
             if (!write_file(json)) {
-                return LoadOutcome::kFailed;
+                return LoadOutcome::kProvisionFailed;
             }
             record_mtime();
             return LoadOutcome::kProvisionedNewFile;
@@ -98,7 +110,7 @@ public:
 
         record_mtime();
         if (!parse_file_into(instance)) {
-            return LoadOutcome::kFailed;
+            return LoadOutcome::kParseFailed;
         }
         return LoadOutcome::kLoadedExistingFile;
     }

@@ -3,6 +3,7 @@
 // NativeActivity, section 6.1, superseded). System.loadLibrary() in testapp/'s MainActivity.kt
 // triggers this automatically; there is no other native entry point for the app target anymore.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -10,6 +11,7 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <utility>
 
 #include <cereal/archives/binary.hpp>
@@ -128,7 +130,23 @@ constexpr entt::id_type kHeartbeatCounterReflectId = entt::hashed_string{"konati
 // PointerFollow (the follower-dot demo entity) - the first REAL exercise of exactly the
 // stale-layout rejection this header was built for: a v1 file on an updated device is refused and
 // replaced, never mis-parsed.
+//
+// Honest tradeoff, written down explicitly (a deep-review audit pass, 2026-07-25, found this
+// documented everywhere as a correctness MECHANISM but nowhere as the product-level consequence it
+// also is): bumping this version does not just reject a stale file, it PERMANENTLY DISCARDS every
+// existing install's saved state with no migration path - the next launch simply starts fresh, as
+// if kOpenFailed. Accepted deliberately for this project's current scope (a demo tick counter and
+// a follower dot's position - nobody is meaningfully harmed losing that across an update); revisit
+// this default the moment this mechanism ever carries state a real user would mind losing.
 constexpr std::uint32_t kAppStateVersion = 2;
+
+// Single source of truth for what this app's durable snapshot serializes - see
+// ecs/snapshot_file.hpp's own SnapshotComponents<Tuple> comment for why this replaced two
+// independently hand-maintained lists (one at the write call site, one at the read call site) that
+// a deep-review audit pass found had no structural guard against drifting apart on a future
+// kAppStateVersion bump. Real Entity id chunk deliberately excluded - both entt::snapshot/
+// snapshot_loader already handle it first, unconditionally, on both sides.
+using AppStateComponents = std::tuple<HeartbeatCounter, konative::spatial::Transform, PointerFollow>;
 
 // Registered via `world().systems().add()` in `on_started()` below - `SystemSequence::run()` calls
 // every registered system, in registration order, once per real `World::tick()` call (itself driven
@@ -380,11 +398,26 @@ public:
                         "KonativeAndroidApp: AppConfig loaded from the EXISTING config file at {}.",
                         config_file_->path());
                     break;
-                case konative::app::config::LoadOutcome::kFailed:
+                // kProvisionFailed vs kParseFailed - split from one shared kFailed by a deep-review
+                // audit pass (2026-07-25) specifically so this log line can say WHICH kind of
+                // problem it is (a fresh-install filesystem issue vs. an existing file's bad
+                // content) instead of leaving an operator to guess. Both fall back the same way
+                // (compiled-in defaults, mtime poll keeps watching for a fixing edit) - only the
+                // wording differs.
+                case konative::app::config::LoadOutcome::kProvisionFailed:
                     konative::core::log_error(
-                        "KonativeAndroidApp: AppConfig could not be loaded from or provisioned at "
-                        "{} - running on the struct's compiled-in defaults. The mtime poll keeps "
-                        "watching: a fixing edit still hot-reloads live, no restart needed.",
+                        "KonativeAndroidApp: AppConfig had no existing file at {} and could not "
+                        "create one (a filesystem-level problem - storage full, permission denied, "
+                        "or similar) - running on the struct's compiled-in defaults. The mtime poll "
+                        "keeps watching: a config file appearing later still hot-reloads live.",
+                        config_file_->path());
+                    break;
+                case konative::app::config::LoadOutcome::kParseFailed:
+                    konative::core::log_error(
+                        "KonativeAndroidApp: AppConfig's existing file at {} could not be parsed (a "
+                        "content problem - malformed JSON or a wrong field type) - running on the "
+                        "struct's compiled-in defaults. The mtime poll keeps watching: a fixing edit "
+                        "still hot-reloads live, no restart needed.",
                         config_file_->path());
                     break;
             }
@@ -428,10 +461,13 @@ public:
         bool restored_from_disk = false;
         if (!config_directory_.empty()) {
             state_file_path_ = config_directory_ + "/konative_state.bin";
-            auto restored =
-                konative::ecs::read_snapshot_file<HeartbeatCounter, konative::spatial::Transform,
-                                                   PointerFollow>(registry, state_file_path_,
-                                                                   kAppStateVersion);
+            // Best-effort sweep for any `.tmp*` orphan left by a crash between a prior process's
+            // temp-file write and its rename-into-place - see cleanup_orphaned_snapshot_temp_files's
+            // own comment. Safe to run before the restore attempt: it only ever touches `.tmp*`
+            // siblings, never state_file_path_ itself.
+            konative::ecs::cleanup_orphaned_snapshot_temp_files(state_file_path_);
+            auto restored = konative::ecs::SnapshotComponents<AppStateComponents>::read(
+                registry, state_file_path_, kAppStateVersion);
             if (restored) {
                 restored_from_disk = true;
                 std::uint64_t restored_ticks = 0;
@@ -648,28 +684,41 @@ public:
         // forget job: Taskflow (already proven working, see the self-check above) would be the
         // right tool for something recurring/coordinated, but constructing a whole tf::Executor for
         // one periodic single-shot job would be more machinery than this needs.
-        if (tick_count_ % static_cast<std::uint64_t>(app_config.snapshot_interval_ticks) == 0) {
+        // snapshot_in_flight_ guards against a real race a deep-review audit pass found (2026-07-25):
+        // nothing previously stopped a SECOND detached writer thread from starting before a prior
+        // one finished. Two concurrent writers each do their own atomic temp-then-rename correctly
+        // in isolation, but with no ordering between the two renames, the FILE ON DISK ends up
+        // reflecting whichever thread's rename() happened to complete last - not necessarily the
+        // higher tick count - purely from thread-scheduling jitter, no I/O slowness required. Never
+        // corrupts (each writer's own temp-then-rename stays atomic), only risks briefly-stale-but-
+        // valid data if a crash then lands before the next successful, non-racing snapshot. Skipping
+        // this tick's snapshot entirely when a previous one is still in flight (rather than queuing
+        // or blocking) is the simplest fix that structurally rules out the race: this is a periodic,
+        // best-effort persistence mechanism, not a "never miss one" guarantee, and the next interval
+        // tries again regardless.
+        if (tick_count_ % static_cast<std::uint64_t>(app_config.snapshot_interval_ticks) == 0 &&
+            !snapshot_in_flight_.exchange(true, std::memory_order_acq_rel)) {
             std::ostringstream buffer;
             {
                 cereal::BinaryOutputArchive archive(buffer);
-                // Component set + order must mirror on_started()'s read_snapshot_file call and
-                // kAppStateVersion's version history exactly - cereal binary has no per-component
-                // framing, the version header is what keeps a mismatch honest.
-                entt::snapshot{world().registry()}
-                    .get<konative::ecs::Entity>(archive)
-                    .get<HeartbeatCounter>(archive)
-                    .get<konative::spatial::Transform>(archive)
-                    .get<PointerFollow>(archive);
+                // The real Entity id chunk is handled first, unconditionally, matching
+                // read_snapshot_file's own hardcoded `loader.get<Entity>(archive)` - see
+                // AppStateComponents's own comment for why the caller-supplied tail is a single
+                // shared tuple instead of two independently hand-maintained lists.
+                entt::snapshot writer{world().registry()};
+                writer.get<konative::ecs::Entity>(archive);
+                konative::ecs::SnapshotComponents<AppStateComponents>::write(writer, archive);
             }
             // The background thread now does the real durable work the event's "Saved" name always
             // promised: an atomic temp-file-then-rename write of the serialized bytes to the state
             // file on_started() restores from (empty path = getFilesDir() failed at load - the
             // in-memory pipeline still runs, persisted just stays false). tick_count_ doubles as
             // the unique temp-file suffix - unique per snapshot by construction, so two still-
-            // running detached writers can never collide on one temp name. Logging from this
+            // running detached writers can never collide on one temp NAME (snapshot_in_flight_
+            // above is what stops two from running at all). Logging from this
             // thread is safe: core/log.hpp's sink is android_sink_mt, the mutex-protected variant.
             std::thread([bytes = buffer.str(), queue = &snapshot_queue_, path = state_file_path_,
-                         unique = tick_count_] {
+                         unique = tick_count_, in_flight = &snapshot_in_flight_] {
                 bool persisted = false;
                 if (!path.empty()) {
                     auto written = konative::ecs::write_snapshot_bytes_file(bytes, path, unique,
@@ -683,6 +732,7 @@ public:
                             path, static_cast<int>(written.error()));
                     }
                 }
+                in_flight->store(false, std::memory_order_release);
                 queue->post(
                     konative::events::persistence::SnapshotSavedEvent{bytes.size(), persisted});
             }).detach();
@@ -861,6 +911,12 @@ private:
     konative::ecs::Entity follower_entity_ = konative::ecs::kNullEntity;
     bool follower_has_user_target_ = false;
     konative::scheduling::CrossThreadEventQueue<konative::events::persistence::SnapshotSavedEvent> snapshot_queue_;
+    // Guards against two detached snapshot-writer threads ever running concurrently - see the
+    // on_tick() snapshot block's own comment for the real rename() race this closes. Only ever
+    // set true on the main thread (inside the exchange() check itself) and cleared to false from
+    // within the writer thread it gates - std::atomic, not a plain bool, because that clear is a
+    // genuine cross-thread write.
+    std::atomic<bool> snapshot_in_flight_{false};
 };
 
 // Function-local static, same singleton-via-static pattern examples/minimal_triangle/main.cpp's

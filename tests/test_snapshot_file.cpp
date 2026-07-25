@@ -30,6 +30,17 @@ void serialize(Archive& archive, SavedCounter& counter) {
     archive(counter.ticks);
 }
 
+// A second component type, purely so SnapshotComponents<Tuple>'s multi-component tests below
+// exercise real ORDER-sensitivity, not just a single-type pass-through.
+struct SavedLabel {
+    std::uint64_t tag = 0;
+};
+
+template <class Archive>
+void serialize(Archive& archive, SavedLabel& label) {
+    archive(label.tag);
+}
+
 constexpr std::uint32_t kTestVersion = 1;
 
 std::filesystem::path fresh_scratch_dir(const char* case_name) {
@@ -184,4 +195,127 @@ TEST_CASE("snapshot_file: writing into a nonexistent directory is kOpenFailed, n
         kTestVersion);
     REQUIRE_FALSE(result);
     CHECK(result.error() == konative::ecs::SnapshotFileError::kOpenFailed);
+}
+
+// SnapshotComponents<Tuple> exists specifically so a real app's write call site and read call site
+// can share ONE component-list type instead of two independently hand-typed lists that a deep-
+// review audit pass found had no structural guard against drifting apart on a future version bump
+// (jni_onload.cpp's own AppStateComponents is the real, production use of this exact mechanism).
+// This proves the wrapper itself is genuinely symmetric - not just "compiles" - for a real
+// MULTI-component, ORDER-sensitive case.
+TEST_CASE("SnapshotComponents<Tuple>: write() and read() round-trip multiple components via one shared tuple, in order") {
+    using TestComponents = std::tuple<SavedCounter, SavedLabel>;
+
+    const auto dir = fresh_scratch_dir("shared-tuple");
+    const std::string path = (dir / "state.bin").string();
+
+    konative::ecs::Registry source;
+    const auto e1 = source.create();
+    source.emplace<SavedCounter>(e1, SavedCounter{42});
+    source.emplace<SavedLabel>(e1, SavedLabel{7});
+    const auto e2 = source.create();
+    source.emplace<SavedCounter>(e2, SavedCounter{99});
+    source.emplace<SavedLabel>(e2, SavedLabel{8});
+
+    std::ostringstream buffer;
+    {
+        cereal::BinaryOutputArchive archive(buffer);
+        entt::snapshot writer{source};
+        writer.get<konative::ecs::Entity>(archive);
+        konative::ecs::SnapshotComponents<TestComponents>::write(writer, archive);
+    }
+    REQUIRE(konative::ecs::write_snapshot_bytes_file(buffer.str(), path, 0, kTestVersion));
+
+    konative::ecs::Registry restored;
+    auto result = konative::ecs::SnapshotComponents<TestComponents>::read(restored, path, kTestVersion);
+    REQUIRE(result);
+    CHECK(result.value() == 2);
+    for (auto [entity, counter] : source.view<SavedCounter>().each()) {
+        REQUIRE(restored.valid(entity));
+        CHECK(restored.get<SavedCounter>(entity).ticks == counter.ticks);
+        CHECK(restored.get<SavedLabel>(entity).tag == source.get<SavedLabel>(entity).tag);
+    }
+}
+
+// Real evidence the wrapper is order-preserving, not just "both components end up present somehow"
+// - swapping the tuple's declared order must produce byte-identical archives to writing the same
+// two .get<>() calls by hand in that same order (cereal's binary format has no per-component
+// framing, so order IS the only thing that could silently differ here).
+TEST_CASE("SnapshotComponents<Tuple>: component order in the tuple matches a hand-written .get<>() chain byte-for-byte") {
+    konative::ecs::Registry registry;
+    const auto entity = registry.create();
+    registry.emplace<SavedCounter>(entity, SavedCounter{123});
+    registry.emplace<SavedLabel>(entity, SavedLabel{456});
+
+    std::ostringstream via_tuple_buffer;
+    {
+        cereal::BinaryOutputArchive archive(via_tuple_buffer);
+        entt::snapshot writer{registry};
+        writer.get<konative::ecs::Entity>(archive);
+        konative::ecs::SnapshotComponents<std::tuple<SavedCounter, SavedLabel>>::write(writer, archive);
+    }
+
+    std::ostringstream by_hand_buffer;
+    {
+        cereal::BinaryOutputArchive archive(by_hand_buffer);
+        entt::snapshot{registry}
+            .get<konative::ecs::Entity>(archive)
+            .get<SavedCounter>(archive)
+            .get<SavedLabel>(archive);
+    }
+
+    CHECK(via_tuple_buffer.str() == by_hand_buffer.str());
+}
+
+// cleanup_orphaned_snapshot_temp_files() - the real crash-orphan sweep jni_onload.cpp's on_started()
+// now runs before every restore attempt. Simulates exactly what a process kill mid-write leaves
+// behind (write_snapshot_bytes_file's own real temp-name shape, `<path>.tmp<suffix>`), without
+// needing to actually crash a process to test it.
+TEST_CASE("cleanup_orphaned_snapshot_temp_files: removes real orphaned .tmp* siblings, leaves the real file and unrelated files alone") {
+    const auto dir = fresh_scratch_dir("cleanup-orphans");
+    const std::string path = (dir / "konative_state.bin").string();
+
+    // The real file, as if a prior snapshot completed successfully.
+    {
+        std::ofstream stream(path, std::ios::binary);
+        stream << "real snapshot bytes";
+    }
+    // Two orphans, matching write_snapshot_bytes_file's real `path + ".tmp" + unique_suffix` shape.
+    {
+        std::ofstream stream(path + ".tmp300", std::ios::binary);
+        stream << "orphaned mid-write bytes";
+    }
+    {
+        std::ofstream stream(path + ".tmp600", std::ios::binary);
+        stream << "another orphan";
+    }
+    // An unrelated file that merely happens to share the same directory - must survive untouched.
+    const std::string unrelated_path = (dir / "unrelated.txt").string();
+    {
+        std::ofstream stream(unrelated_path, std::ios::binary);
+        stream << "not a snapshot artifact at all";
+    }
+
+    konative::ecs::cleanup_orphaned_snapshot_temp_files(path);
+
+    CHECK(std::filesystem::exists(path));           // the real file survives
+    CHECK(std::filesystem::exists(unrelated_path));  // an unrelated sibling survives
+    CHECK_FALSE(std::filesystem::exists(path + ".tmp300")); // both orphans removed
+    CHECK_FALSE(std::filesystem::exists(path + ".tmp600"));
+}
+
+TEST_CASE("cleanup_orphaned_snapshot_temp_files: no orphans, missing directory, or missing file - all safe no-ops") {
+    const auto dir = fresh_scratch_dir("cleanup-noop");
+    const std::string path = (dir / "konative_state.bin").string();
+
+    // No files at all yet - must not crash or throw.
+    konative::ecs::cleanup_orphaned_snapshot_temp_files(path);
+
+    // A real file with zero orphans - must leave it alone.
+    { std::ofstream stream(path, std::ios::binary); stream << "real bytes"; }
+    konative::ecs::cleanup_orphaned_snapshot_temp_files(path);
+    CHECK(std::filesystem::exists(path));
+
+    // A path whose directory doesn't exist at all - must not crash or throw.
+    konative::ecs::cleanup_orphaned_snapshot_temp_files((dir / "no" / "such" / "dir" / "state.bin").string());
 }

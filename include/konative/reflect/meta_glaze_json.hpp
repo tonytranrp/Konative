@@ -1,5 +1,6 @@
 #pragma once
 
+#include <limits>
 #include <string>
 
 #include <entt/entt.hpp>
@@ -62,13 +63,36 @@ inline bool meta_value_to_json(const entt::meta_any& value, std::string& out) {
 // more-constrained-wins partial-ordering rule picks the double-conversion one, whose body calls
 // get<double>() on a variant that's actually holding bool, throwing at runtime. get<bool>() is the
 // only correct, unambiguous call for this one field type.
+//
+// int/float go through get<double>() first, then an EXPLICIT RANGE CHECK, before the narrowing
+// cast - found by a deep-review audit pass (2026-07-25): reading the actual vendored
+// json/generic_fwd.hpp confirmed as<int>()/as<float>() resolve (via the same more-constrained-wins
+// rule as the bool bug above) to an unconditional `static_cast<T>(get<double>())` for this
+// project's real f64 mode - a genuinely UB narrowing conversion for any JSON number outside the
+// target type's representable range (e.g. a config file edited to `1e30` for an int field). Every
+// CURRENT real caller (AppConfig) happens to floor/ceiling the result afterward via
+// clamp_to_valid() - but this module is generic over any future entt::meta-reflected component's
+// int/float field, and clamping is that FUTURE caller's job, not this one's; the cast itself must
+// not be UB regardless of what (if anything) happens to run after it. Rejecting an out-of-range
+// number outright (matching this function's own existing "return false rather than guess" policy
+// for any value shape it doesn't handle) is the correct fix, not a downstream clamp.
 template <typename Instance>
 bool json_value_to_meta(const entt::meta_type& field_type, const glz::generic& value, entt::meta_data& data, Instance& instance) {
     if (field_type == entt::resolve<int>()) {
-        return data.set(instance, value.as<int>());
+        const double raw = value.get<double>();
+        if (raw < static_cast<double>(std::numeric_limits<int>::min()) ||
+            raw > static_cast<double>(std::numeric_limits<int>::max())) {
+            return false; // out of int's representable range - reject, don't invoke UB
+        }
+        return data.set(instance, static_cast<int>(raw));
     }
     if (field_type == entt::resolve<float>()) {
-        return data.set(instance, value.as<float>());
+        const double raw = value.get<double>();
+        if (raw < -static_cast<double>(std::numeric_limits<float>::max()) ||
+            raw > static_cast<double>(std::numeric_limits<float>::max())) {
+            return false; // out of float's representable range - reject, don't invoke UB
+        }
+        return data.set(instance, static_cast<float>(raw));
     }
     if (field_type == entt::resolve<bool>()) {
         return data.set(instance, value.get<bool>());

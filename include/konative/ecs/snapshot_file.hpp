@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <tuple>
 
 #include <cereal/archives/binary.hpp>
 #include <entt/entt.hpp>
@@ -143,6 +144,77 @@ core::Result<std::size_t, SnapshotFileError> read_snapshot_file(Registry& regist
     }
 
     return R::ok(detail::alive_entity_count(registry));
+}
+
+// The write-side counterpart to read_snapshot_file<Components...>() above, and the reason
+// SnapshotComponents<Tuple> below exists at all: a deep-review audit pass (2026-07-25) found that
+// this codebase's own write call site (a hand-written entt::snapshot{}.get<A>(archive).get<B>
+// (archive)... chain) and read call site (read_snapshot_file<A, B, ...>(...)'s template argument
+// list) were two INDEPENDENTLY hand-maintained lists that happened to agree today with nothing
+// structural preventing them drifting apart on a future kAppStateVersion-style bump - cereal's
+// binary format has no per-component framing to catch a mismatch at parse time (see
+// read_snapshot_file's own comment), so a silent drift could resolve as either a clean exception
+// (the likely case) or, in the worst case, a "successful" restore that fabricates entities from
+// misinterpreted bytes (traced against EnTT's real vendored snapshot_loader source, not assumed).
+// Mirrors read_snapshot_file's own `(loader.get<Components>(archive), ...)` fold exactly, just for
+// the write side - entt::snapshot::get<Type>() returns *this for chaining, so the fold expression
+// over the comma operator chains identically to writing them out by hand.
+template <typename... Components>
+void write_components_to_snapshot(entt::snapshot& snapshot, cereal::BinaryOutputArchive& archive) {
+    (snapshot.get<Components>(archive), ...);
+}
+
+// A single source of truth for a durable snapshot's component set: define ONE
+// `using MyComponents = std::tuple<A, B, C>;` alias at the call site and use
+// `SnapshotComponents<MyComponents>::write(...)`/`::read(...)` for both directions instead of two
+// separately-typed-out lists - a future edit to add/remove/reorder a component only touches the
+// tuple alias once, and both directions stay in sync BY CONSTRUCTION rather than by code-review
+// discipline alone. The real Entity id chunk is deliberately NOT part of this tuple - both
+// entt::snapshot and entt::snapshot_loader already handle it first, unconditionally, inside their
+// own respective call sites (see read_snapshot_file's own `loader.get<Entity>(archive)` above) -
+// this only covers the caller-supplied component tail.
+template <typename ComponentTuple>
+struct SnapshotComponents;
+
+template <typename... Components>
+struct SnapshotComponents<std::tuple<Components...>> {
+    static void write(entt::snapshot& snapshot, cereal::BinaryOutputArchive& archive) {
+        write_components_to_snapshot<Components...>(snapshot, archive);
+    }
+
+    static core::Result<std::size_t, SnapshotFileError> read(Registry& registry,
+                                                              const std::string& path,
+                                                              std::uint32_t expected_version) {
+        return read_snapshot_file<Components...>(registry, path, expected_version);
+    }
+};
+
+// Removes any leftover `<final-filename>.tmp*` sibling files next to `path` - the only way one can
+// exist is a process kill/crash between write_snapshot_bytes_file() creating its temp file and
+// completing the rename into place. Found by a deep-review audit pass (2026-07-25): nothing
+// previously ever swept these; in the common case (a stable snapshot_interval_ticks across runs)
+// a later run's write to the SAME tick-count-derived temp name incidentally overwrites and renames
+// away an old orphan, but that's incidental self-healing, not a guarantee - an interval change, or
+// the app never again reaching that exact tick count, leaves it forever. Best-effort: any error
+// (missing directory, permission) is silently ignored - a leftover temp file is harmless clutter
+// bytes, not a correctness concern, so this is a courtesy sweep, not something worth its own error
+// channel. Safe to call any time, including concurrently with a read of the real `path` itself -
+// it never touches `path`, only its `.tmp*`-prefixed siblings.
+inline void cleanup_orphaned_snapshot_temp_files(const std::string& path) {
+    std::error_code ec;
+    const std::filesystem::path final_path(path);
+    const std::string temp_prefix = final_path.filename().string() + ".tmp";
+
+    for (const auto& entry : std::filesystem::directory_iterator(final_path.parent_path(), ec)) {
+        if (ec) {
+            return;
+        }
+        const std::string entry_name = entry.path().filename().string();
+        if (entry_name.compare(0, temp_prefix.size(), temp_prefix) == 0) {
+            std::error_code remove_ec;
+            std::filesystem::remove(entry.path(), remove_ec);
+        }
+    }
 }
 
 } // namespace konative::ecs
