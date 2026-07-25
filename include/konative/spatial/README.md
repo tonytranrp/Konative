@@ -31,10 +31,11 @@ caveat this paragraph used to carry is closed.
   driving the decision.
 - **3D position/rotation/scale (`glm::vec3`/`glm::quat`/`glm::vec3`), not a narrower 2D-only
   shape.** This is the standard, conventional ECS Transform layout (Unity, Godot, Bevy all use
-  exactly this) - even though this project's only current rendering surface is 2D Compose, nothing
-  C++-side currently consumes `Transform` at all, so there's no real driving need forcing a
-  narrower choice. 2D usage is still fully expressible (z as depth/layering, rotation constrained
-  to the Z axis) without redesigning later if a real 3D need ever arrives.
+  exactly this) - even though the one real consumer that exists today (the follower-dot demo, see
+  the Status section above) only ever exercises 2D position, nothing yet has a real, concrete need
+  for rotation/scale/z at all, so there's still no driving need forcing a narrower choice. 2D usage
+  is still fully expressible (z as depth/layering, rotation constrained to the Z axis) without
+  redesigning later if a real 3D need ever arrives.
 - **`to_matrix()` is a free function, not a member.** Matches this codebase's established
   convention of keeping ECS components plain data (`HeartbeatCounter`, `AppConfig`) with behavior
   expressed separately, not object methods.
