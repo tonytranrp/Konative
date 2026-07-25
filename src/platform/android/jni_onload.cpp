@@ -582,9 +582,11 @@ public:
     void on_tick(float delta_seconds) override {
         ++tick_count_;
 
-        // Live config hot-reload: one mtime stat every kConfigPollIntervalTicks frames (~2s at
-        // 60Hz - latency a human editing the file perceives as immediate, cost invisible next to
-        // the frame loop), a full re-read only when the file genuinely changed.
+        // Live config hot-reload: one mtime stat every kConfigPollIntervalTicks frames (real
+        // measured latency, not assumed - see kConfigPollIntervalTicks's own comment - roughly
+        // 1s on real hardware, faster still on the emulator; a human editing the file perceives
+        // it as immediate either way), cost invisible next to the frame loop, a full re-read only
+        // when the file genuinely changed.
         // JsonConfigFile::poll_reload() itself guarantees the live value is never torn by a
         // half-parsed edit (it parses into a copy and assigns only on full success). Runs BEFORE
         // this frame's own app_config read below, so an edit takes effect the same frame it's
@@ -839,7 +841,11 @@ private:
     // tick_log_interval/snapshot_interval_ticks now live in AppConfig (registry().ctx()), not here -
     // see on_started()'s real AppConfig load and on_tick()'s per-frame ctx() read above.
     static constexpr int kHeartbeatEntityCount = 3;
-    // ~2s at 60Hz between config-file mtime stats - see on_tick()'s hot-reload block.
+    // Real measured tick rates (logcat delta-timing, 2026-07-25 - see AppConfig's own
+    // kMinSnapshotIntervalTicks comment in app_config.hpp for the full measurement writeup): ~1s
+    // between config-file mtime stats on the physical Galaxy S24-class phone (exactly 120Hz), well
+    // under 1s on the LDPlayer x86_64 emulator (~238Hz) - not the "~2s at 60Hz" this comment used
+    // to assume before either rate was actually measured. See on_tick()'s hot-reload block.
     static constexpr std::uint64_t kConfigPollIntervalTicks = 120;
     std::uint64_t tick_count_ = 0;
     std::uint64_t touch_event_count_ = 0;
