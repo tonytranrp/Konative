@@ -55,19 +55,30 @@ TEST_CASE("AppConfig: a partial JSON override changes only the field present, ma
     CHECK(config.snapshot_interval_ticks == 300);    // left at its struct default - not an error
 }
 
-TEST_CASE("AppConfig: clamp_to_valid() forces both intervals to >= 1 - the on_tick() division-by-zero guard") {
+TEST_CASE("AppConfig: clamp_to_valid() floors both intervals at their real safe minimums, not just >= 1") {
     // Both fields are `tick_count % interval` divisors in jni_onload.cpp's on_tick(), and both are
-    // now genuinely user-editable (config/json_config_file.hpp's real file) - a zero or negative
-    // value is a real input a config edit can produce, and unclamped it would be integer division
-    // by zero (real UB), not just a weird cadence.
+    // now genuinely user-editable (config/json_config_file.hpp's real file). A bare >= 1 floor
+    // only prevents integer division by zero (real UB) - it does NOT prevent a real resource-
+    // exhaustion path: snapshot_interval_ticks=1 would spawn a detached file-writing std::thread
+    // EVERY tick (60-120/sec at this project's own documented real refresh rates), a thread/fd
+    // churn risk a simple config edit should never be able to trigger. kMinSnapshotIntervalTicks/
+    // kMinTickLogInterval are the real, reasoned floors - see app_config.hpp's own comment on each.
     konative::app::AppConfig config{};
     config.tick_log_interval = 0;
     config.snapshot_interval_ticks = -50;
     konative::app::clamp_to_valid(config);
-    CHECK(config.tick_log_interval == 1);
-    CHECK(config.snapshot_interval_ticks == 1);
+    CHECK(config.tick_log_interval == konative::app::kMinTickLogInterval);
+    CHECK(config.snapshot_interval_ticks == konative::app::kMinSnapshotIntervalTicks);
 
-    // Already-valid values pass through untouched.
+    // A value already above the floor but still small (e.g. an aggressive but not pathological
+    // hot-reload edit) passes through untouched - clamping is a safety floor, not a re-quantization.
+    config.tick_log_interval = 15;
+    config.snapshot_interval_ticks = 45;
+    konative::app::clamp_to_valid(config);
+    CHECK(config.tick_log_interval == 15);
+    CHECK(config.snapshot_interval_ticks == 45);
+
+    // Already-valid struct-default values pass through untouched.
     config.tick_log_interval = 120;
     config.snapshot_interval_ticks = 300;
     konative::app::clamp_to_valid(config);

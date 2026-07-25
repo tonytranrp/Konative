@@ -26,16 +26,33 @@ struct AppConfig {
     int snapshot_interval_ticks = 300; // KonativeAndroidApp::on_tick()'s periodic snapshot cadence
 };
 
-// Clamps both intervals to >= 1. Both are used as `tick_count % interval` divisors in
-// KonativeAndroidApp::on_tick() - and since config/json_config_file.hpp made AppConfig genuinely
-// user-editable (a real file in the app's internal storage, hot-reloaded live), a zero or negative
-// value is a real input someone can type, not a can't-happen: unclamped, it would be integer
-// division by zero, real UB, a crash a config edit should never be able to cause. A free function,
-// not a member - components stay plain data with behavior expressed separately, the same
+// A floor of 1 alone only prevents the division-by-zero UB - it does NOT prevent a real resource-
+// exhaustion path config/json_config_file.hpp's hot-reload made genuinely reachable by a simple
+// file edit (previously this value was compiled-in, always the sane default, never user input):
+// jni_onload.cpp's on_tick() spawns a real detached std::thread doing blocking file I/O (an atomic
+// temp-file-then-rename write) every `snapshot_interval_ticks` ticks. At this project's own
+// documented real refresh rates (Choreographer, ~60-120Hz on real hardware - see on_tick()'s own
+// comment), an unclamped value of 1 means 60-120 new OS threads per second, each doing disk I/O,
+// spawned indefinitely for as long as the app runs - real thread/fd churn a config edit should
+// never be able to trigger. 30 caps this at a bounded 2-4 writer-threads/sec even at this
+// project's fastest observed refresh rate, while still leaving the interval genuinely live-tunable
+// down to something much more frequent than the 300 compiled-in default.
+inline constexpr int kMinSnapshotIntervalTicks = 30;
+
+// tick_log_interval's floor doesn't guard a resource leak (logging spawns no thread) - just
+// logcat-flood risk, the same "downgrade high-frequency noise" lesson this codebase already
+// learned once for FrameTicker's own JNI-binding-failure logging. 10 bounds it to at most ~12
+// lines/sec at 120Hz, well short of a real flood, while staying far more permissive than
+// snapshotting's own floor since logging is comparatively cheap.
+inline constexpr int kMinTickLogInterval = 10;
+
+// Both fields are `tick_count % interval` divisors in KonativeAndroidApp::on_tick() - see each
+// constant's own comment above for why its specific floor is what it is, not just "> 0". A free
+// function, not a member - components stay plain data with behavior expressed separately, the same
 // convention as spatial::to_matrix() (spatial/README.md's own Hard Rule shape).
 inline void clamp_to_valid(AppConfig& config) {
-    config.tick_log_interval = std::max(config.tick_log_interval, 1);
-    config.snapshot_interval_ticks = std::max(config.snapshot_interval_ticks, 1);
+    config.tick_log_interval = std::max(config.tick_log_interval, kMinTickLogInterval);
+    config.snapshot_interval_ticks = std::max(config.snapshot_interval_ticks, kMinSnapshotIntervalTicks);
 }
 
 } // namespace konative::app
