@@ -26,7 +26,7 @@ jobs:
       # internal structure, less portable across cache restores).
       CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install a pinned, modern CMake + Ninja
         uses: lukka/get-cmake@latest
@@ -35,7 +35,7 @@ jobs:
           ninjaVersion: "^1.11.0"
 
       - name: Cache CPM dependency sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.CPM_SOURCE_CACHE }}
           # Keyed on the exact dependency pins, not just their existence - a version bump or a new
