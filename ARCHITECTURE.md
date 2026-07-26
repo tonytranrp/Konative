@@ -36,7 +36,7 @@
 
 This document is the synthesized design for Konative: a CMake/C++ framework combining Kotlin and
 C++ into **one native Android `.so`** — rendering and app logic together. Everything below is
-grounded in the research passes summarized in §13 (plus the rendering-direction reversal noted
+grounded in the research passes summarized in §14 (plus the rendering-direction reversal noted
 above).
 
 ---
@@ -601,13 +601,15 @@ Konative/
 ├── src/
 │   ├── CMakeLists.txt
 │   ├── README.md
-│   └── platform/android/
-│       ├── CMakeLists.txt
-│       └── jni_onload.cpp   (the one real entry point — JNI_OnLoad → verify_blob() →
-│                              load_class_from_dex() → install(Application, ByteBuffer?), §6.4; the
-│                              old android_main/activity_bridge.cpp/looper_pump.cpp trio this
-│                              replaced is fully REMOVED, not just superseded — confirmed by §6.7's
-│                              own status table, which this tree used to silently contradict)
+│   ├── platform/android/
+│   │   ├── CMakeLists.txt
+│   │   └── jni_onload.cpp   (the one real entry point — JNI_OnLoad → verify_blob() →
+│   │                          load_class_from_dex() → install(Application, ByteBuffer?), §6.4; the
+│   │                          old android_main/activity_bridge.cpp/looper_pump.cpp trio this
+│   │                          replaced is fully REMOVED, not just superseded — confirmed by §6.7's
+│   │                          own status table, which this tree used to silently contradict)
+│   └── koreload_modules/  (KONATIVE_ENABLE_KORELOAD only, §12 - pointer_follow/, waypoint_cycler/,
+│                            a real sibling-repo CMake consumption of ../KoReload,/, not CPM-fetched)
 ├── native/               (Kotlin/Native side — FULLY SUPERSEDED for rendering, kept only as a
 │   ├── src/Renderer.kt    historical record per §6.7/§9; do not extend)
 │   └── cinterop/         (empty by default — reserved for a genuinely un-bundled C API a future
@@ -930,7 +932,97 @@ verification of this same pipeline had only ever run on the LDPlayer emulator or
 
 ---
 
-## 12. Subagent orchestration rules for continued work on this repo
+## 12. Optional KoReload integration: hot-reloadable components
+
+**KONATIVE_ENABLE_KORELOAD** (root `CMakeLists.txt`, default `OFF`) is a real, dev-only opt-in that
+converts two of this project's own components into components that hot-swap in a running process
+without a full app restart, via KoReload (`github.com/tonytranrp/KoReload`, a separate sibling
+project — same author, own git history/CI/memory namespace). Not CPM-fetched: `src/koreload_modules/
+CMakeLists.txt` `add_subdirectory()`s a real sibling checkout directly (`KORELOAD_SOURCE_DIR`
+defaults to `${CMAKE_CURRENT_SOURCE_DIR}/../../../KoReload,`, CACHE-overridable), so local KoReload
+edits are picked up immediately with no re-fetch — this matters for iterating on the integration
+itself, not just consuming a pinned release. `KORELOAD_BUILD_EXAMPLES`/`_TESTS` are forced OFF for
+this consumption (`src/koreload_modules/CMakeLists.txt`) so this opt-in path stays fast and never
+pulls KoReload's own desktop-only CLI tooling (efsw/reproc/CLI11/nlohmann_json) into an Android build.
+
+### 12.1 `pointer_follow`: the first hot-reloadable component
+
+Converts `move_followers_toward_targets` (§5's spatial-approach demo system) from an always-linked
+static system registration into a real KoReload module (`src/koreload_modules/pointer_follow/`).
+The host wraps it in one `koreload::ManagedModuleSlot<PointerFollowKoreloadInterface>`
+(`jni_onload.cpp`'s `setup_koreload_modules()`) — a KoReload library type that generalizes the
+register+load+poll-for-next-generation+reload lifecycle every host-managed module needs, repointed
+on every successful load/reload. `world().systems().add()` is still called exactly once for the
+whole process lifetime regardless of how many times the module itself reloads (`SystemSequence` has
+no removal API — calling `add()` again per reload would run every past generation's system every
+frame, not just the latest). The module's own internal state
+(`reload_survival_ticks`, a real `konative::app::HeartbeatCounter`) round-trips across a reload via
+genuine `cereal::BinaryOutputArchive`/`BinaryInputArchive` calls, the same serialize() Konative's own
+full-process-restart snapshot already trusts (§4) — proving that pattern survives KoReload's
+in-process hot-swap too, not just a full restart. Verified independently on both real devices (the
+physical phone and the LDPlayer emulator) — see the KoReload repo's own `PROMPT.md` §13 M8.
+
+### 12.2 `waypoint_cycler` and real cross-module calls
+
+A second, independently-hot-reloadable module (`src/koreload_modules/waypoint_cycler/`) that
+autonomously cycles a demo follower entity's target through a fixed 4-waypoint pattern. Unlike
+`pointer_follow`, it's resolved through KoReload's newer **cross-module interface registry**
+(`registry.subscribe_interface()`, not the plain `PluginContract::instance`-cast mechanism
+`pointer_follow` still uses for its own host-facing contract) — the first time a real host (not just
+KoReload's own synthetic test fixtures) has resolved a module's cross-module-callable interface this
+way. `PointerFollowKoreloadInterface::tick` gained a third, nullable
+`const WaypointCyclerInterface*` parameter for this — the host resolves the *current* pointer fresh
+every call (via its own `InterfaceHandle<WaypointCyclerInterface>`, repointed on every
+`waypoint_cycler` load/reload) and passes it in; `pointer_follow`'s own compiled `tick_thunk` — its
+own code, in its own `.so` — calls straight into `waypoint_cycler`'s `drive_targets()`, a genuine
+cross-`.so` call, not the host calling both modules separately and combining the results.
+`koreload_abi_version()` was bumped 1→2 for this real, intentional breaking change to the contract —
+an old-ABI build already on a device is refused cleanly (`NeedsFullRestart`) rather than the host
+silently calling a 2-parameter function pointer as if it took 3. When `waypoint_cycler` isn't loaded
+(yet, or at all), `tick_thunk` falls back to whatever touch-driven target was already set — the
+"consumer can degrade gracefully if its peer isn't loaded" property
+`ModuleRegistry::subscribe_interface()` was designed for, not a crash.
+
+### 12.3 Real, on-device verification performed
+
+Verified live on the real LDPlayer x86_64 emulator (git commit `672ead4`, "Real cross-module-calls
+dogfood: waypoint_cycler drives pointer_follow's target") — not just "it compiled":
+
+- `llvm-readelf --dyn-syms` confirmed both modules' factory/`koreload_abi_version` symbols export
+  with `GLOBAL DEFAULT` visibility (the same real `-fvisibility=hidden`-vs-`extern "C"` hazard
+  KoReload's own `KORELOAD_MODULE_EXPORT` macro exists to close, §7/§9 in the KoReload repo).
+- The app's own on-screen "C++ follower: (x, y)" telemetry — with **zero touch input** the whole
+  time — moved `(0,3) -> (-3,0)` across three real, time-separated screenshots, exactly matching
+  `waypoint_cycler`'s own waypoint sequence: numeric, unambiguous proof the cross-module call is
+  genuinely driving the follower entity's position, not a coincidence.
+- Pushed a `waypoint_cycler`-only new generation (`pointer_follow` untouched): logcat showed
+  **only** the `waypoint_cycler module RELOAD -> status Ok` line — zero `pointer_follow` log line
+  appeared at all, proving `pointer_follow`'s own module/generation/handle state was completely
+  undisturbed by its dependency's independent reload. The "modules stay safely independent while
+  depending on each other" property this whole cross-module mechanism exists to guarantee, proven
+  for real, in this host, not just asserted.
+- Both `KONATIVE_ENABLE_KORELOAD=ON` and `=OFF` configure+build cleanly on `android-x86_64`;
+  Konative's own desktop test suite stayed 75/75 throughout (unaffected either way —
+  `jni_onload.cpp` is Android-only).
+
+Deployed via a direct `cmake --build` plus a root-push onto the already-installed testapp
+(`testapp/README.md`'s own already-documented "direct cmake --build plus root-push deploy" path) —
+no Gradle rebuild needed for this iteration.
+
+### 12.4 What's not yet proven
+
+Matching this document's own "genuinely unproven vs. working precedent" convention (§9): the
+cross-module dogfood above (§12.2/§12.3) was verified on the LDPlayer emulator only, not yet
+re-confirmed on the physical phone the way `pointer_follow` alone already has been (§12.1) — and it
+was verified via the direct-`cmake --build`-plus-root-push path, not yet via a full
+`./gradlew assembleDebug -PkonativeEnableKoreload=ON` run. Real, open gaps, not silently assumed
+closed. As of this writing, `.github/workflows/android-build.yml` never turns
+`KONATIVE_ENABLE_KORELOAD` on either - see that file for whether a dedicated CI job now covers this
+(this note may go stale before this document's own next full read-through catches it).
+
+---
+
+## 13. Subagent orchestration rules for continued work on this repo
 
 (Also recorded in memory as `feedback-konative-subagent-rules` — repeating here so it's visible
 in-repo, not just in Claude's memory.)
@@ -944,7 +1036,7 @@ in-repo, not just in Claude's memory.)
 
 ---
 
-## 13. Research provenance
+## 14. Research provenance
 
 This document synthesizes, in order:
 1. The original dex-embedding research pass (`research/research.md`) — superseded as the primary
@@ -977,3 +1069,10 @@ This document synthesizes, in order:
     both docs below by name; this entry and #11 restore consistency with those).
 11. `research/incbin_embedding_research.md` — the concrete `.incbin`/GAS-directive/build-graph
     recipe directly grounding §6.5, equally load-bearing for the current design.
+12. Real-world grounding for §12 (not a research doc — a real, live integration): the sibling
+    KoReload repo's own `PROMPT.md`/`ARCHITECTURE.md`/`CROSS_MODULE_CALLS_DESIGN.md` for the
+    hot-reload mechanism itself, and this repo's own git commit `672ead4` ("Real cross-module-calls
+    dogfood: waypoint_cycler drives pointer_follow's target") for the concrete on-device proof §12
+    cites — found missing from this document entirely by a plan-mode gap-closure audit, 2026-07-26
+    (§12 itself didn't exist until that pass, the same class of omission item #10 above already
+    corrected once for a different section).
