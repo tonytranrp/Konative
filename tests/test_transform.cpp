@@ -64,6 +64,18 @@ TEST_CASE("approach(): converges toward the target, frame-rate independently, wi
     approach(frozen, target, -1.0F, 1.0F);
     approach(frozen, target, kRate, 0.0F);
     CHECK(frozen.position == glm::vec3{5.0F, 5.0F, 5.0F});
+
+    // A genuinely NEGATIVE delta_seconds - not just zero - is a real, reachable value (a clock
+    // non-monotonicity between two Choreographer frame timestamps, however rare) a deep-review
+    // audit pass (2026-07-25) specifically flagged as worth locking in: WITHOUT the dt <= 0.0F
+    // guard, factor = 1 - exp(-rate * negative_dt) = 1 - exp(positive) is > 1, and glm::mix with a
+    // scalar factor > 1 genuinely EXTRAPOLATES past the target away from the current position - a
+    // real overshoot bug the existing guard happens to close off, more robustly than its own
+    // comment above explicitly claims credit for. This test is that credit, made concrete.
+    Transform negative_dt{};
+    negative_dt.position = glm::vec3{5.0F, 5.0F, 5.0F};
+    approach(negative_dt, target, kRate, -1.0F);
+    CHECK(negative_dt.position == glm::vec3{5.0F, 5.0F, 5.0F});
 }
 
 TEST_CASE("Transform: round-trips exactly through cereal binary serialization (transform_serialize.hpp)") {
