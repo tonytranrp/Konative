@@ -211,6 +211,18 @@ const char* koreload_status_name(koreload::LoadStatus status) {
     }
     return "Unknown";
 }
+
+// ModuleRecord::last_error is deliberately NOT cleared on a successful load/reload (see that
+// field's own doc comment in module_record.hpp: "always reflects the last REAL failure reason
+// even after the module recovers") - useful for a diagnostics API, but naively appending it to
+// a log line whenever it's non-empty means a clean "status Ok" after ANY past failure (e.g. the
+// very first gen1 load attempt) would print that stale failure message forever after, next to
+// every future successful reload. Confirmed on-device, not hypothetical: 2026-07-25's real
+// gen1(Failed)->gen2(Ok) recovery logged "status Ok (undefined symbol: koreload_module_create)".
+// Only show last_error when the status it's paired with actually represents this attempt failing.
+bool koreload_status_is_success(koreload::LoadStatus status) {
+    return status == koreload::LoadStatus::Ok || status == koreload::LoadStatus::AlreadyLoaded;
+}
 #endif
 
 class KonativeAndroidApp final : public konative::app::Application {
@@ -855,9 +867,12 @@ private:
         });
 
         koreload::LoadStatus status = koreload_registry_.load(koreload_pointer_follow_module_id_);
+        const koreload::ModuleRecord* record = koreload_registry_.find(koreload_pointer_follow_module_id_);
         konative::core::log_info(
-            "KonativeAndroidApp: KoReload pointer_follow module initial load from {} -> status {}",
-            initial_path, koreload_status_name(status));
+            "KonativeAndroidApp: KoReload pointer_follow module initial load from {} -> status {}{}",
+            initial_path, koreload_status_name(status),
+            (record && !record->last_error.empty() && !koreload_status_is_success(status))
+                ? (" (" + record->last_error + ")") : "");
 
         world().systems().add([this](konative::ecs::Registry& registry, float delta_seconds) {
             if (koreload_pointer_follow_handle_) {
@@ -894,10 +909,30 @@ private:
             return;
         }
         koreload_registry_.update_path(koreload_pointer_follow_module_id_, next_path);
-        koreload::LoadStatus status = koreload_registry_.reload(koreload_pointer_follow_module_id_);
+
+        // ModuleRegistry::reload() requires the module to already be Active (PROMPT.md section
+        // 11.3's hot-swap contract - it rolls back to "the old handle/instance", which only
+        // exists if a prior load ever succeeded). If the INITIAL load failed, the record is
+        // still Failed/Discovered, never Active, so reload() would just early-return NotLoaded
+        // without even attempting the new path - silently never recovering, and (found on a
+        // real device) leaving record->last_error stuck on stage the original failure forever
+        // since NotLoaded's early return never touches it. load() is the correct call here: it
+        // re-attempts dlopen/dlsym against the just-updated loaded_path exactly like a first
+        // load would, and its own guard (`state == Active -> AlreadyLoaded`) makes it just as
+        // safe to call as reload() once the module IS Active.
+        const koreload::ModuleRecord* pre_record =
+            koreload_registry_.find(koreload_pointer_follow_module_id_);
+        bool was_active = pre_record && pre_record->state == koreload::ModuleState::Active;
+        koreload::LoadStatus status = was_active
+            ? koreload_registry_.reload(koreload_pointer_follow_module_id_)
+            : koreload_registry_.load(koreload_pointer_follow_module_id_);
+        const koreload::ModuleRecord* record = koreload_registry_.find(koreload_pointer_follow_module_id_);
         konative::core::log_info(
-            "KonativeAndroidApp: KoReload pointer_follow module RELOAD from {} -> status {}",
-            next_path, koreload_status_name(status));
+            "KonativeAndroidApp: KoReload pointer_follow module {} from {} -> status {}{}",
+            was_active ? "RELOAD" : "LOAD (recovering from non-Active state)", next_path,
+            koreload_status_name(status),
+            (record && !record->last_error.empty() && !koreload_status_is_success(status))
+                ? (" (" + record->last_error + ")") : "");
         if (status == koreload::LoadStatus::Ok) {
             ++koreload_pointer_follow_generation_;
         }

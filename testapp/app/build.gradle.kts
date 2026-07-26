@@ -142,6 +142,17 @@ android {
                 if (gitExecutable != null) {
                     baseArgs += "-DGIT_EXECUTABLE=$gitExecutable"
                 }
+                // Same forwarding shape as every property above - KONATIVE_ENABLE_KORELOAD is OFF
+                // by default in the root CMakeLists.txt (a normal build is unaffected), opt in
+                // with:
+                //   ./gradlew assembleDebug -PkonativeEnableKoreload=ON
+                // See PROMPT.md section 13 M8 in the KoReload repo (github.com/tonytranrp/KoReload)
+                // for what this actually builds/wires up.
+                val enableKoreload = (project.findProperty("konativeEnableKoreload") as String?)
+                    ?: System.getenv("KONATIVE_ENABLE_KORELOAD")
+                if (enableKoreload != null) {
+                    baseArgs += "-DKONATIVE_ENABLE_KORELOAD=$enableKoreload"
+                }
                 arguments(*baseArgs.toTypedArray())
                 targets("konative_app_native")
             }

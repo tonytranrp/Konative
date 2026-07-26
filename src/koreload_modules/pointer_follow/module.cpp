@@ -27,8 +27,14 @@ PointerFollowKoreloadInterface g_interface{&tick_thunk};
 
 } // namespace
 
-extern "C" void koreload_module_create(koreload::PluginContract* out) {
+// KORELOAD_MODULE_EXPORT (not plain extern "C") - real, reproduced bug this project hit directly:
+// Konative's own repo-wide CMAKE_CXX_VISIBILITY_PRESET hidden (KonativeWarnings.cmake) applies to
+// this MODULE target too, so a plain `extern "C"` function here compiles with hidden visibility
+// and never makes it into the .so's dynamic symbol table - confirmed on-device via a real
+// dlerror(): "undefined symbol: koreload_module_create". See plugin_contract.hpp's own comment on
+// KORELOAD_MODULE_EXPORT for the full explanation.
+KORELOAD_MODULE_EXPORT void koreload_module_create(koreload::PluginContract* out) {
     *out = koreload::PluginContract{&g_interface, nullptr, nullptr, nullptr};
 }
 
-extern "C" unsigned koreload_abi_version() { return 1; }
+KORELOAD_MODULE_EXPORT unsigned koreload_abi_version() { return 1; }
