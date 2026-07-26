@@ -37,6 +37,36 @@ fi
 echo "Installing $APK_PATH"
 adb install -t -r "$APK_PATH"
 
+# Set by android-emulator-verify-koreload only - inert for the plain job above. A fresh install has
+# KoReload compiled in but nothing to load (this exact gap is what this job's own first CI run
+# found - the app started cleanly, but neither module ever logged "status Ok", because nothing had
+# ever pushed a generation-1 module file into config_directory_). Push both module .sos the same
+# way koreload_cli's own push_to_app_storage() does for a real non-root device: stage under
+# /data/local/tmp, then `run-as` copy into the app's own private storage - run-as works right after
+# install, the app doesn't need to have been launched first (PackageManager creates the private
+# data directory at install time). Matches koreload_module_path()'s own real naming convention
+# (jni_onload.cpp) exactly - koreload_<name>.gen1.so.
+if [ "${KORELOAD_EXPECTED:-0}" = "1" ]; then
+  PKG="com.konative.testapp"
+  FILES_DIR="/data/data/$PKG/files"
+  for pair in "pointer_follow:$REPO_DIR/build/android-x86_64/src/koreload_modules/pointer_follow/konative_pointer_follow.so" \
+              "waypoint_cycler:$REPO_DIR/build/android-x86_64/src/koreload_modules/waypoint_cycler/konative_waypoint_cycler.so"; do
+    name="${pair%%:*}"
+    local_so="${pair#*:}"
+    if [ ! -s "$local_so" ]; then
+      echo "::error::$local_so is missing or empty - the 'Build the two KoReload module .sos independently' step above should have produced it"
+      exit 1
+    fi
+    staging="/data/local/tmp/koreload_${name}.gen1.so"
+    dest="$FILES_DIR/koreload_${name}.gen1.so"
+    echo "Pushing $local_so -> device:$dest"
+    adb push "$local_so" "$staging"
+    adb shell run-as "$PKG" cp "$staging" "$dest"
+    adb shell run-as "$PKG" chmod 755 "$dest"
+    adb shell rm -f "$staging"
+  done
+fi
+
 adb logcat -c
 adb shell am start -n com.konative.testapp/.MainActivity
 sleep 15

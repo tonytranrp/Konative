@@ -435,6 +435,30 @@ jobs:
             -PkonativeKotlinClasspathDir="$GITHUB_WORKSPACE/Konative/tools/kotlin-classpath-resolver/resolved-output/kotlin-classpath" \
             -PkonativeAapt2AarDir="$GITHUB_WORKSPACE/Konative/tools/kotlin-classpath-resolver/resolved-output/aapt2-aars"
 
+      # Gradle's own externalNativeBuild only targets("konative_app_native") (testapp/app/build.gradle.kts)
+      # - it never builds src/koreload_modules/'s own two module .sos, so the app above genuinely has
+      # KoReload compiled in but nothing to load yet (a real gap this exact CI job's own first run
+      # found: it installed and ran clean, but neither module ever logged "status Ok" - there was
+      # nothing at config_directory_ + "/koreload_<name>.gen1.so" for load() to find). Building them
+      # independently via the same standalone cmake --preset flow android-build (the sibling job)
+      # already uses - a real, already-proven pattern in this same file, not a new one - reusing the
+      # kotlinc/classpath-resolver output already fetched above rather than repeating those steps.
+      - name: Build the two KoReload module .sos independently
+        run: |
+          cd Konative
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          cmake --preset android-x86_64 \
+            -DKONATIVE_ENABLE_KORELOAD=ON \
+            -DKONATIVE_KOTLINC="$KONATIVE_KOTLINC" \
+            -DKONATIVE_ANDROID_JAR="$ANDROID_HOME/platforms/android-$SDK_PLATFORM/android.jar" \
+            -DKONATIVE_AAPT2="$ANDROID_HOME/build-tools/$SDK_BUILD_TOOLS/aapt2" \
+            -DKONATIVE_KOTLIN_CLASSPATH_DIR="$GITHUB_WORKSPACE/Konative/tools/kotlin-classpath-resolver/resolved-output/kotlin-classpath" \
+            -DKONATIVE_AAPT2_AAR_DIR="$GITHUB_WORKSPACE/Konative/tools/kotlin-classpath-resolver/resolved-output/aapt2-aars"
+          cmake --build build/android-x86_64 --target konative_koreload_pointer_follow konative_koreload_waypoint_cycler
+          test -s build/android-x86_64/src/koreload_modules/pointer_follow/konative_pointer_follow.so
+          test -s build/android-x86_64/src/koreload_modules/waypoint_cycler/konative_waypoint_cycler.so
+
       - name: AVD cache
         uses: actions/cache@v6
         id: avd-cache
