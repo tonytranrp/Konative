@@ -1013,12 +1013,14 @@ no Gradle rebuild needed for this iteration.
 
 Matching this document's own "genuinely unproven vs. working precedent" convention (§9): the
 cross-module dogfood above (§12.2/§12.3) was verified on the LDPlayer emulator only, not yet
-re-confirmed on the physical phone the way `pointer_follow` alone already has been (§12.1) — and it
-was verified via the direct-`cmake --build`-plus-root-push path, not yet via a full
+re-confirmed on the physical phone the way `pointer_follow` alone already has been (§12.1) — and
+the manual dogfood run itself used the direct-`cmake --build`-plus-root-push path, not a full
 `./gradlew assembleDebug -PkonativeEnableKoreload=ON` run. Real, open gaps, not silently assumed
-closed. As of this writing, `.github/workflows/android-build.yml` never turns
-`KONATIVE_ENABLE_KORELOAD` on either - see that file for whether a dedicated CI job now covers this
-(this note may go stale before this document's own next full read-through catches it).
+closed. **Now CI-exercised, closing part of this**: `.github/workflows/android-build.yml`'s
+`android-emulator-verify-koreload` job builds the real Gradle path
+(`-PkonativeEnableKoreload=ON`) and asserts both modules report a clean initial load in logcat on
+every push/PR — the remaining open gap is specifically re-confirming the §12.2/§12.3 cross-module
+behavior itself (not just a clean load) on the physical phone.
 
 ---
 

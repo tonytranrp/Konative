@@ -333,3 +333,154 @@ jobs:
             logcat.txt
             konative_emulator_screenshot.png
           if-no-files-found: warn
+
+  # A separate job, not a matrix leg on either job above - KONATIVE_ENABLE_KORELOAD needs a real
+  # sibling KoReload checkout (src/koreload_modules/CMakeLists.txt's KORELOAD_SOURCE_DIR default,
+  # "../../../KoReload," relative to that file - three levels up from Konative's own root), which
+  # means Konative can't sit at $GITHUB_WORKSPACE's own root the way the two jobs above assume -
+  # every relative path in this job is rooted one level deeper (Konative/...). Folding this into
+  # either existing job would force that layout change onto their already-proven paths for no
+  # benefit. See ARCHITECTURE.md section 12 for what this subsystem actually is; this job is
+  # otherwise a straight copy of android-emulator-verify's own already-proven recipe (same pinned
+  # versions, same emulator API level) with KONATIVE_ENABLE_KORELOAD=ON added.
+  android-emulator-verify-koreload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+      KOTLIN_VERSION: "2.4.0"
+      SDK_PLATFORM: "36"
+      SDK_BUILD_TOOLS: "36.0.0"
+      NDK_VERSION: "28.0.13004108"
+      EMULATOR_API_LEVEL: 34
+    steps:
+      - name: Checkout Konative
+        uses: actions/checkout@v7
+        with:
+          path: Konative
+
+      - name: Checkout KoReload (sibling checkout - KORELOAD_SOURCE_DIR needs it at ../KoReload, relative to Konative)
+        uses: actions/checkout@v7
+        with:
+          repository: tonytranrp/KoReload
+          path: 'KoReload,'
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install a pinned, modern CMake + Ninja
+        uses: lukka/get-cmake@v4.4.0
+        with:
+          cmakeVersion: "~3.28.0"
+          ninjaVersion: "^1.11.0"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK (platform ${{ env.SDK_PLATFORM }}, build-tools ${{ env.SDK_BUILD_TOOLS }}, NDK ${{ env.NDK_VERSION }})
+        uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools platforms;android-${{ env.SDK_PLATFORM }} build-tools;${{ env.SDK_BUILD_TOOLS }} ndk;${{ env.NDK_VERSION }}"
+
+      - name: Download and verify the real kotlinc distribution
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            curl -fsSL -o kotlin-compiler.zip "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
+            curl -fsSL -o kotlin-compiler.zip.sha256 "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip.sha256"
+            echo "$(cat kotlin-compiler.zip.sha256)  kotlin-compiler.zip" | sha256sum -c -
+            unzip -q kotlin-compiler.zip
+            echo "KONATIVE_KOTLINC=$PWD/kotlinc/bin/kotlinc" >> "$GITHUB_ENV"
+
+      - name: Cache CPM dependency sources (both repos' pins)
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: cpm-cache-koreload-${{ runner.os }}-${{ hashFiles('Konative/cmake/modules/KonativeDependencies.cmake', 'KoReload,/CMakeLists.txt') }}
+          restore-keys: |
+            cpm-cache-koreload-${{ runner.os }}-
+
+      - name: Set up Gradle (wrapper/dependency caching for both the resolver and testapp/ builds below)
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Resolve the Kotlin/AndroidX classpath (tools/kotlin-classpath-resolver/)
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            cd Konative/tools/kotlin-classpath-resolver
+            echo "sdk.dir=$ANDROID_HOME" > local.properties
+            ./gradlew resolveKonativeClasspath --no-daemon
+
+      - name: Build the real testapp/ debug APK via Gradle, with KONATIVE_ENABLE_KORELOAD=ON
+        run: |
+          cd Konative/testapp
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          ./gradlew assembleDebug --no-daemon \
+            -PkonativeEnableKoreload=ON \
+            -PkonativeKotlinc="$KONATIVE_KOTLINC" \
+            -PkonativeAndroidJar="$ANDROID_HOME/platforms/android-$SDK_PLATFORM/android.jar" \
+            -PkonativeAapt2="$ANDROID_HOME/build-tools/$SDK_BUILD_TOOLS/aapt2" \
+            -PkonativeKotlinClasspathDir="$GITHUB_WORKSPACE/Konative/tools/kotlin-classpath-resolver/resolved-output/kotlin-classpath" \
+            -PkonativeAapt2AarDir="$GITHUB_WORKSPACE/Konative/tools/kotlin-classpath-resolver/resolved-output/aapt2-aars"
+
+      - name: AVD cache
+        uses: actions/cache@v6
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ env.EMULATOR_API_LEVEL }}
+
+      - name: Create AVD and generate snapshot for caching
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ env.EMULATOR_API_LEVEL }}
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "Generated AVD snapshot for caching."
+
+      # Same real script android-emulator-verify uses (not a forked copy - keeps the two from
+      # drifting apart), pointed at this job's own Konative/ subdirectory via KONATIVE_REPO_DIR and
+      # asked to additionally confirm both KoReload modules loaded via KORELOAD_EXPECTED - see that
+      # script's own top section for what these two env vars do when unset (the plain job's own
+      # behavior, completely unaffected by this job existing).
+      - name: Install + launch on emulator, verify both KoReload modules load
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ env.EMULATOR_API_LEVEL }}
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: bash "$GITHUB_WORKSPACE/Konative/.github/scripts/verify-emulator-run.sh"
+        env:
+          KONATIVE_REPO_DIR: ${{ github.workspace }}/Konative
+          KORELOAD_EXPECTED: "1"
+
+      - name: Upload logcat + screenshot as evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-emulator-verify-koreload-evidence
+          path: |
+            logcat.txt
+            konative_emulator_screenshot.png
+          if-no-files-found: warn

@@ -20,12 +20,18 @@
 
 set -uo pipefail
 
+# Set by android-emulator-verify-koreload where Konative is checked out to a named subdirectory,
+# not $GITHUB_WORKSPACE itself (a true sibling KoReload checkout needs that layout - see that job's
+# own comment). Defaults to $GITHUB_WORKSPACE, preserving this script's original behavior for the
+# plain android-emulator-verify job, which checks out Konative directly at the workspace root.
+REPO_DIR="${KONATIVE_REPO_DIR:-$GITHUB_WORKSPACE}"
+
 LOGCAT_PATH="$GITHUB_WORKSPACE/logcat.txt"
 SCREENSHOT_PATH="$GITHUB_WORKSPACE/konative_emulator_screenshot.png"
 
-APK_PATH="$(find "$GITHUB_WORKSPACE/testapp/app/build" -iname '*.apk' | head -n1)"
+APK_PATH="$(find "$REPO_DIR/testapp/app/build" -iname '*.apk' | head -n1)"
 if [ -z "$APK_PATH" ]; then
-  echo "::error::no .apk found under $GITHUB_WORKSPACE/testapp/app/build - the Gradle build step above should have produced one (see testapp/README.md's own 'Where the APK actually lands' note: the exact path is Gradle-version-dependent, this searches the whole tree rather than a fixed path)"
+  echo "::error::no .apk found under $REPO_DIR/testapp/app/build - the Gradle build step above should have produced one (see testapp/README.md's own 'Where the APK actually lands' note: the exact path is Gradle-version-dependent, this searches the whole tree rather than a fixed path)"
   exit 1
 fi
 echo "Installing $APK_PATH"
@@ -54,4 +60,20 @@ echo "Self-checks PASSED: $PASS_COUNT (expect at least 8 - jni_onload.cpp's on_s
 if [ "$PASS_COUNT" -lt 8 ]; then
   echo "::error::expected at least 8 'self-check PASSED' lines in logcat, found $PASS_COUNT - on_started() likely never ran (native library failed to load, or install() never fired)"
   exit 1
+fi
+
+# Set by android-emulator-verify-koreload only (ARCHITECTURE.md section 12) - inert for the plain
+# job above, which never sets this. Confirms both KoReload modules actually loaded, not just that
+# the app itself started cleanly - matching jni_onload.cpp's own setup_koreload_modules() log text
+# exactly (koreload::to_string(LoadStatus::Ok) == "Ok").
+if [ "${KORELOAD_EXPECTED:-0}" = "1" ]; then
+  if ! grep -q "KoReload pointer_follow module initial load -> status Ok" "$LOGCAT_PATH"; then
+    echo "::error::KONATIVE_ENABLE_KORELOAD=ON build did not log a successful pointer_follow initial load - see the uploaded logcat.txt artifact"
+    exit 1
+  fi
+  if ! grep -q "KoReload waypoint_cycler module initial load -> status Ok" "$LOGCAT_PATH"; then
+    echo "::error::KONATIVE_ENABLE_KORELOAD=ON build did not log a successful waypoint_cycler initial load - see the uploaded logcat.txt artifact"
+    exit 1
+  fi
+  echo "Both KoReload modules (pointer_follow, waypoint_cycler) reported a successful initial load."
 fi
