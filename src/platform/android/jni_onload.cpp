@@ -23,6 +23,8 @@
 #include "konative/app/application.hpp"
 #include "konative/app/config/json_config_file.hpp"
 #include "konative/app/entry_point.hpp"
+#include "konative/app/heartbeat_counter.hpp"
+#include "konative/app/heartbeat_counter_serialize.hpp"
 #include "konative/app/pointer_follow.hpp"
 #include "konative/app/pointer_follow_serialize.hpp"
 #include "konative/app/pointer_follow_system.hpp"
@@ -89,18 +91,21 @@ constexpr const char* kEntryPointClass = "com.konative.generated.KonativeEntryPo
 // app, not just in desktop unit tests. Everything else this session wired up (Dispatcher/events via
 // lifecycle dispatch, a real per-frame tick driver, Taskflow) proves the rest of the ECS core works
 // here - nothing yet had exercised Registry/View/System together in this app until now.
-struct HeartbeatCounter {
-    std::uint64_t ticks = 0;
-};
+//
+// HeartbeatCounter itself (struct + serialize()) now lives in
+// konative/app/heartbeat_counter{,_serialize}.hpp, not this anonymous namespace - moved out for
+// the same reason PointerFollow was (see that using-declaration's own comment below):
+// src/koreload_modules/pointer_follow/module.cpp (KONATIVE_ENABLE_KORELOAD, PROMPT.md section 13
+// M8 in the KoReload repo) now ALSO uses this exact type + its real serialize(), as the genuine
+// Konative payload its own save_state/restore_state hooks round-trip via cereal - not for this
+// host's own per-entity heartbeat counting below, which is unchanged.
+using konative::app::HeartbeatCounter;
 
-// cereal finds serialize() via ADL, so it lives in HeartbeatCounter's own (anonymous) namespace -
-// same requirement konative::ecs::detail::SnapshotSelfCheckComponent's own serialize() documents.
-// Lets the real periodic snapshot below (KonativeAndroidApp::on_tick()) reuse entt::snapshot for a
-// real component, not just the self-check's private test-only type.
-template <class Archive>
-void serialize(Archive& archive, HeartbeatCounter& counter) {
-    archive(counter.ticks);
-}
+// cereal finds serialize() via ADL, so HeartbeatCounter's lives in its own real namespace
+// (konative::app, heartbeat_counter_serialize.hpp) now, not this anonymous one - same requirement
+// konative::ecs::detail::SnapshotSelfCheckComponent's own serialize() documents. Lets the real
+// periodic snapshot below (KonativeAndroidApp::on_tick()) reuse entt::snapshot for a real
+// component, not just the self-check's private test-only type.
 
 // spatial::Transform's first real consumer (spatial/README.md's own "no rendering or physics
 // consumer yet" caveat, closed): pairs with a Transform on ONE demo entity whose position a real
@@ -869,10 +874,12 @@ private:
         koreload::LoadStatus status = koreload_registry_.load(koreload_pointer_follow_module_id_);
         const koreload::ModuleRecord* record = koreload_registry_.find(koreload_pointer_follow_module_id_);
         konative::core::log_info(
-            "KonativeAndroidApp: KoReload pointer_follow module initial load from {} -> status {}{}",
+            "KonativeAndroidApp: KoReload pointer_follow module initial load from {} -> status "
+            "{}{}, reload_survival_ticks={}",
             initial_path, koreload_status_name(status),
             (record && !record->last_error.empty() && !koreload_status_is_success(status))
-                ? (" (" + record->last_error + ")") : "");
+                ? (" (" + record->last_error + ")") : "",
+            koreload_pointer_follow_handle_ ? koreload_pointer_follow_handle_->reload_survival_ticks.ticks : 0);
 
         world().systems().add([this](konative::ecs::Registry& registry, float delta_seconds) {
             if (koreload_pointer_follow_handle_) {
@@ -928,11 +935,13 @@ private:
             : koreload_registry_.load(koreload_pointer_follow_module_id_);
         const koreload::ModuleRecord* record = koreload_registry_.find(koreload_pointer_follow_module_id_);
         konative::core::log_info(
-            "KonativeAndroidApp: KoReload pointer_follow module {} from {} -> status {}{}",
+            "KonativeAndroidApp: KoReload pointer_follow module {} from {} -> status {}{}, "
+            "reload_survival_ticks={}",
             was_active ? "RELOAD" : "LOAD (recovering from non-Active state)", next_path,
             koreload_status_name(status),
             (record && !record->last_error.empty() && !koreload_status_is_success(status))
-                ? (" (" + record->last_error + ")") : "");
+                ? (" (" + record->last_error + ")") : "",
+            koreload_pointer_follow_handle_ ? koreload_pointer_follow_handle_->reload_survival_ticks.ticks : 0);
         if (status == koreload::LoadStatus::Ok) {
             ++koreload_pointer_follow_generation_;
         }

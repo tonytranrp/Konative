@@ -10,6 +10,8 @@ target_sources(konative_app INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/config/json_config_file.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/entry_point.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/detail/lifecycle_bridge.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/heartbeat_counter.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/heartbeat_counter_serialize.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pointer_follow.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pointer_follow_koreload_interface.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pointer_follow_serialize.hpp
