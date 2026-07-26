@@ -202,3 +202,42 @@ and `konativeNdkPath` being required even for a bare `clean`) are both folded in
 installing" above - neither is specific to Gradle 9.4.1 itself, both are ordinary Android/Gradle
 project setup requirements this project's own docs simply hadn't needed to state yet, since nobody
 had run a real `gradlew` build against a truly clean `testapp/` checkout before this point.
+
+## Release builds and signing
+
+`testapp/app/build.gradle.kts`'s `release` build type is genuinely signed
+(`release-debug.keystore`, committed - see that file's own comment in `build.gradle.kts` for why a
+checked-in, deliberately-non-production keystore is the right, standard convention here, same
+reasoning as this folder's own committed `gradlew`) and minified (`isMinifyEnabled = true`) -
+unlike earlier, when it had neither and simply couldn't produce an installable release APK. This
+only affects this app's own thin outer dex (`MainActivity.kt`) - the embedded Compose UI dex is
+minified separately by a CMake-driven R8 pass (`embedded_kotlin/r8-rules.pro`, `ARCHITECTURE.md`
+section 6.6), untouched by this.
+
+```sh
+cd testapp
+./gradlew assembleRelease \
+  -PkonativeNdkPath=<...> -PkonativeKotlinc=<...> -PkonativeR8=<...> -PkonativeAndroidJar=<...> \
+  -PkonativeKotlinClasspathDir=<...> -PkonativeAapt2=<...> -PkonativeJavac=<...> -PkonativeAapt2AarDir=<...>
+find app/build -iname "*.apk"                       # locate the real release APK - same Gradle-version caveat as debug
+adb uninstall com.konative.testapp                   # only needed if a debug build (signed with a DIFFERENT key) is already installed
+adb install -r <the real release APK found above>    # no -t needed - unlike debug, release is not testOnly by default
+adb shell am start -n com.konative.testapp/.MainActivity
+adb logcat -s Konative:V AndroidRuntime:E DEBUG:E
+```
+
+**Verified 2026-07-26, partially - real gap found and separately flagged, not the release config's
+own fault**: `signingConfigs`/the `release` build type's own Gradle Kotlin DSL is confirmed real and
+valid - `./gradlew help -PkonativeNdkPath=...` (a config-only invocation that evaluates the entire
+`build.gradle.kts`, including `signingConfigs.getByName("release")`'s own reference resolution)
+returned `BUILD SUCCESSFUL` with zero DSL errors. A full local `./gradlew assembleRelease` on this
+dev machine hit a **real, pre-existing, unrelated** bug instead: a large resolved Kotlin classpath
+(65 jars in `tools/kotlin-classpath-resolver/resolved-output/kotlin-classpath/` as of this writing)
+likely exceeds Windows' `cmd.exe` command-line length limit when kotlinc is invoked, corrupting the
+classpath argument - confirmed NOT caused by this signing/minification change (none of it touches
+classpath construction), and confirmed NOT to reproduce in CI, where `.github/workflows/
+android-build.yml`'s own jobs build the full kotlinc+aapt2+r8 native+dex pipeline successfully on
+every push (Linux's much higher `ARG_MAX` doesn't hit this same limit). Flagged as its own separate
+fix (a kotlinc `@argfile` response file is the standard remedy) rather than folded into this change.
+Once that's fixed, re-run the full sequence above and replace this note with a real "installed and
+launched cleanly" confirmation, matching the debug loop's own verified-end-to-end bar.

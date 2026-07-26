@@ -166,9 +166,34 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            // A dedicated, checked-in, deliberately-non-production keystore - same "vendor it so a
+            // fresh checkout just works" reasoning as gradlew itself (testapp/README.md). NOT a real
+            // release-signing certificate: the store/key password is the well-known "android" value,
+            // the same spirit as AGP's own auto-generated ~/.android/debug.keystore, just committed
+            // and scoped to this build type instead of machine-implicit. Never reuse this keystore
+            // for a real Play Store submission - generate a real one instead if that day comes.
+            storeFile = file("release-debug.keystore")
+            storePassword = "android"
+            keyAlias = "testapp-release-debug"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // Now signed (signingConfigs.release above) - a genuine, installable release APK is the
+            // whole point of this build type existing; minification was off with nothing signing it,
+            // matching KoReload's own M9 "verify the release build excludes dev-only code" precedent
+            // on the native-.so side (see the KoReload repo's PROMPT.md section 13 M9), now extended
+            // to this app's own outer Gradle-level dex too. Only controls AGP's own R8 pass over
+            // MainActivity.kt's own thin dex - completely separate from, and has zero effect on, the
+            // framework's own embedded Compose dex, which is minified separately by a CMake-driven
+            // R8 pass (embedded_kotlin/r8-rules.pro, KonativeCompileKotlinDex.cmake).
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
