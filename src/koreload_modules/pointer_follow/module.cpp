@@ -28,11 +28,26 @@
 
 namespace {
 
-void tick_thunk(konative::ecs::Registry* registry, float delta_seconds);
+void tick_thunk(konative::ecs::Registry* registry, float delta_seconds,
+                 const WaypointCyclerInterface* waypoint_cycler);
 
 PointerFollowKoreloadInterface g_interface{&tick_thunk, {}};
 
-void tick_thunk(konative::ecs::Registry* registry, float delta_seconds) {
+// A real cross-module call, made from THIS module's own compiled code, into a DIFFERENT
+// independently-dlopen'd module's exported interface (CROSS_MODULE_CALLS_DESIGN.md section 5 item
+// 6's own "two real modules genuinely calling each other" shape, dogfooded here for the first time
+// outside KoReload's own test fixtures - see pointer_follow_koreload_interface.hpp's own comment on
+// `tick` for why `waypoint_cycler` arrives as a parameter rather than this module resolving it
+// itself). When present, waypoint_cycler drives every PointerFollow entity's target autonomously
+// BEFORE this tick's own approach() pass consumes it; when absent (not loaded, or unloaded), this
+// falls back to whatever target touch input already set - degrading gracefully, never a crash,
+// exactly the "consumer can degrade gracefully if its peer isn't loaded" property
+// ModuleRegistry::subscribe_interface() was designed for.
+void tick_thunk(konative::ecs::Registry* registry, float delta_seconds,
+                 const WaypointCyclerInterface* waypoint_cycler) {
+    if (waypoint_cycler != nullptr) {
+        waypoint_cycler->drive_targets(registry, delta_seconds);
+    }
     konative::app::move_followers_toward_targets(*registry, delta_seconds);
     ++g_interface.reload_survival_ticks.ticks;
 }
@@ -86,4 +101,9 @@ KORELOAD_MODULE_EXPORT void koreload_module_create(koreload::PluginContract* out
     *out = koreload::PluginContract{&g_interface, &save_state, &restore_state, &free_state};
 }
 
-KORELOAD_MODULE_EXPORT unsigned koreload_abi_version() { return 1; }
+// Bumped 1->2: tick's own signature gained a third parameter (waypoint_cycler,
+// pointer_follow_koreload_interface.hpp's own comment) - a real, intentional breaking change to
+// this host<->module contract, so an old-ABI build already on a device is refused cleanly
+// (NeedsFullRestart) on its next reload attempt instead of the host silently calling a 2-parameter
+// function pointer as if it took 3.
+KORELOAD_MODULE_EXPORT unsigned koreload_abi_version() { return 2; }

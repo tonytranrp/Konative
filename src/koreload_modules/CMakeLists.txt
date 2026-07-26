@@ -40,3 +40,4 @@ add_subdirectory(${KORELOAD_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/koreload_cor
 unset(CMAKE_POLICY_VERSION_MINIMUM)
 
 add_subdirectory(pointer_follow)
+add_subdirectory(waypoint_cycler)

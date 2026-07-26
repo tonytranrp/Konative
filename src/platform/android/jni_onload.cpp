@@ -31,9 +31,12 @@
 
 #if KONATIVE_ENABLE_KORELOAD
 #include "konative/app/pointer_follow_koreload_interface.hpp"
+#include "konative/app/waypoint_cycler_interface.hpp"
 
 #include <koreload/crash_guard.hpp>
 #include <koreload/interface_handle.hpp>
+#include <koreload/load_status_utils.hpp>
+#include <koreload/managed_module_slot.hpp>
 #include <koreload/module_registry.hpp>
 #endif
 #include "konative/core/log.hpp"
@@ -196,27 +199,10 @@ void increment_heartbeat_counters(konative::ecs::Registry& registry, float /*del
 // (JVM-hosted) still owns real rendering/frame scheduling; this is a SEPARATE, additive per-frame
 // heartbeat for the C++ ECS/systems side, not a rendering driver.
 #if KONATIVE_ENABLE_KORELOAD
-// Human-readable koreload::LoadStatus names for real logcat diagnostics - mirrors
-// examples/koreload_receiver/main.cpp's own status_name() in the KoReload repo exactly (same
-// enum, same reasoning: raw ints in a log line are useless without cross-referencing the header).
-const char* koreload_status_name(koreload::LoadStatus status) {
-    switch (status) {
-        case koreload::LoadStatus::Ok: return "Ok";
-        case koreload::LoadStatus::Failed: return "Failed";
-        case koreload::LoadStatus::Crashed: return "Crashed";
-        case koreload::LoadStatus::AlreadyLoaded: return "AlreadyLoaded";
-        case koreload::LoadStatus::NotLoaded: return "NotLoaded";
-        case koreload::LoadStatus::MissingDependency: return "MissingDependency";
-        case koreload::LoadStatus::IncompatibleDependencyVersion: return "IncompatibleDependencyVersion";
-        case koreload::LoadStatus::DependencyCycle: return "DependencyCycle";
-        case koreload::LoadStatus::HasDependents: return "HasDependents";
-        case koreload::LoadStatus::NeedsFullRestart: return "NeedsFullRestart";
-        case koreload::LoadStatus::StateTransferFailed: return "StateTransferFailed";
-        case koreload::LoadStatus::StateTransferCrashed: return "StateTransferCrashed";
-    }
-    return "Unknown";
-}
-
+// koreload::to_string()/is_success() (KoReload repo, include/koreload/load_status_utils.hpp) used
+// to be hand-duplicated here - removed once the library itself grew a single copy every caller
+// (this file and examples/receiver/main.cpp in the KoReload repo) shares instead. See that
+// header's own comment for the full "second independent copy of the same helper" reasoning.
 // ModuleRecord::last_error is deliberately NOT cleared on a successful load/reload (see that
 // field's own doc comment in module_record.hpp: "always reflects the last REAL failure reason
 // even after the module recovers") - useful for a diagnostics API, but naively appending it to
@@ -224,10 +210,8 @@ const char* koreload_status_name(koreload::LoadStatus status) {
 // very first gen1 load attempt) would print that stale failure message forever after, next to
 // every future successful reload. Confirmed on-device, not hypothetical: 2026-07-25's real
 // gen1(Failed)->gen2(Ok) recovery logged "status Ok (undefined symbol: koreload_module_create)".
-// Only show last_error when the status it's paired with actually represents this attempt failing.
-bool koreload_status_is_success(koreload::LoadStatus status) {
-    return status == koreload::LoadStatus::Ok || status == koreload::LoadStatus::AlreadyLoaded;
-}
+// Only show last_error when the status it's paired with actually represents this attempt failing -
+// koreload::is_success() is exactly that check.
 #endif
 
 class KonativeAndroidApp final : public konative::app::Application {
@@ -605,7 +589,7 @@ public:
             }
         }
 #if KONATIVE_ENABLE_KORELOAD
-        setup_koreload_pointer_follow_module();
+        setup_koreload_modules();
 #else
         world().systems().add(&move_followers_toward_targets);
 #endif
@@ -852,104 +836,134 @@ public:
 
 private:
 #if KONATIVE_ENABLE_KORELOAD
-    // KONATIVE_ENABLE_KORELOAD only - PROMPT.md section 13 M8 in the KoReload repo. Registers and
-    // loads src/koreload_modules/pointer_follow/'s real .so through koreload::ModuleRegistry,
-    // repoints koreload_pointer_follow_handle_ on every successful load/reload, and calls
+    // KONATIVE_ENABLE_KORELOAD only - PROMPT.md section 13 M8 in the KoReload repo (extended by
+    // section 14's cross-module-calls dogfood). Registers and loads both
+    // src/koreload_modules/pointer_follow/ and src/koreload_modules/waypoint_cycler/'s real .so
+    // files through koreload::ModuleRegistry via koreload::ManagedModuleSlot<Interface> (the
+    // shared register+load+poll-for-next-generation lifecycle every host-managed module needs -
+    // KoReload repo's include/koreload/managed_module_slot.hpp, extracted once a second real
+    // module needed the exact sequence pointer_follow alone used to hand-write here), and calls
     // world().systems().add() EXACTLY ONCE for the whole process lifetime - SystemSequence has no
     // removal API, so calling add() again on every reload would run every past generation's system
-    // every frame instead of just the latest. The InterfaceHandle<T> indirection is what lets one
-    // registered wrapper always call through to whichever generation is currently live.
-    void setup_koreload_pointer_follow_module() {
+    // every frame instead of just the latest. Each slot's own InterfaceHandle<T> is what lets one
+    // registered wrapper always call through to whichever generation is currently live,
+    // independently for each module.
+    void setup_koreload_modules() {
         koreload::install_crash_handlers();
 
-        koreload_pointer_follow_generation_ = 1;
-        std::string initial_path = koreload_module_path(koreload_pointer_follow_generation_);
-        koreload_pointer_follow_module_id_ = koreload_registry_.register_module(
-            "pointer_follow", initial_path, "koreload_module_create");
-        koreload_registry_.subscribe(koreload_pointer_follow_module_id_, [this](void* instance) {
-            koreload_pointer_follow_handle_.repoint(
-                static_cast<PointerFollowKoreloadInterface*>(instance));
-        });
-
-        koreload::LoadStatus status = koreload_registry_.load(koreload_pointer_follow_module_id_);
-        const koreload::ModuleRecord* record = koreload_registry_.find(koreload_pointer_follow_module_id_);
+        koreload::LoadStatus pf_status = koreload_pointer_follow_slot_.setup(
+            koreload_registry_, "pointer_follow",
+            [this](unsigned gen) { return koreload_module_path("pointer_follow", gen); },
+            "koreload_module_create", [this](koreload::ModuleId id) {
+                // The plain PluginContract::instance-cast mechanism, same as before - pointer_follow
+                // doesn't provide a cross-module interface itself, it CONSUMES waypoint_cycler's
+                // (below).
+                koreload_registry_.subscribe(id, [this](void* instance) {
+                    koreload_pointer_follow_slot_.handle().repoint(
+                        static_cast<PointerFollowKoreloadInterface*>(instance));
+                });
+            });
+        const koreload::ModuleRecord* pf_record =
+            koreload_registry_.find(koreload_pointer_follow_slot_.module_id());
         konative::core::log_info(
-            "KonativeAndroidApp: KoReload pointer_follow module initial load from {} -> status "
-            "{}{}, reload_survival_ticks={}",
-            initial_path, koreload_status_name(status),
-            (record && !record->last_error.empty() && !koreload_status_is_success(status))
-                ? (" (" + record->last_error + ")") : "",
-            koreload_pointer_follow_handle_ ? koreload_pointer_follow_handle_->reload_survival_ticks.ticks : 0);
+            "KonativeAndroidApp: KoReload pointer_follow module initial load -> status {}{}, "
+            "reload_survival_ticks={}",
+            koreload::to_string(pf_status),
+            (pf_record && !pf_record->last_error.empty() && !koreload::is_success(pf_status))
+                ? (" (" + pf_record->last_error + ")") : "",
+            koreload_pointer_follow_slot_.handle()
+                ? koreload_pointer_follow_slot_.handle()->reload_survival_ticks.ticks : 0);
+
+        // waypoint_cycler is resolved through the NEW cross-module interface registry
+        // (registry.subscribe_interface(), not the plain instance-cast registry.subscribe()
+        // pointer_follow itself still uses above) - PROMPT.md section 14's consumer-facing half,
+        // exercised here for the first time by a real HOST (not just KoReload's own test fixtures)
+        // resolving a module's cross-module-callable interface rather than its plain
+        // PluginContract::instance.
+        koreload::LoadStatus wc_status = koreload_waypoint_cycler_slot_.setup(
+            koreload_registry_, "waypoint_cycler",
+            [this](unsigned gen) { return koreload_module_path("waypoint_cycler", gen); },
+            "koreload_waypoint_cycler_module_create", [this](koreload::ModuleId id) {
+                koreload_registry_.subscribe_interface(
+                    id, kWaypointCyclerInterfaceId, [this](void* instance) {
+                        koreload_waypoint_cycler_slot_.handle().repoint(
+                            static_cast<WaypointCyclerInterface*>(instance));
+                    });
+            });
+        const koreload::ModuleRecord* wc_record =
+            koreload_registry_.find(koreload_waypoint_cycler_slot_.module_id());
+        konative::core::log_info(
+            "KonativeAndroidApp: KoReload waypoint_cycler module initial load -> status {}{}",
+            koreload::to_string(wc_status),
+            (wc_record && !wc_record->last_error.empty() && !koreload::is_success(wc_status))
+                ? (" (" + wc_record->last_error + ")") : "");
 
         world().systems().add([this](konative::ecs::Registry& registry, float delta_seconds) {
-            if (koreload_pointer_follow_handle_) {
-                koreload_pointer_follow_handle_->tick(&registry, delta_seconds);
+            if (koreload_pointer_follow_slot_.handle()) {
+                // Resolved fresh every call from the host-owned, repointed-on-reload handle - an
+                // independent reload of waypoint_cycler is picked up the very next tick with zero
+                // staleness (pointer_follow_koreload_interface.hpp's own comment on `tick`).
+                const WaypointCyclerInterface* waypoint_cycler =
+                    koreload_waypoint_cycler_slot_.handle()
+                        ? koreload_waypoint_cycler_slot_.handle().operator->()
+                        : nullptr;
+                koreload_pointer_follow_slot_.handle()->tick(&registry, delta_seconds, waypoint_cycler);
             }
-            // No handle yet (initial load failed, or hasn't succeeded again after a crashed
-            // reload) - the follower entity simply doesn't move this process, the same "clean,
-            // visible absence, never a crash" every other guarded system in this file fails
-            // toward.
+            // No pointer_follow handle yet (initial load failed, or hasn't succeeded again after a
+            // crashed reload) - the follower entity simply doesn't move this process, the same
+            // "clean, visible absence, never a crash" every other guarded system in this file
+            // falls toward. waypoint_cycler being unavailable is handled one level down, inside
+            // tick_thunk itself, falling back to whatever touch-driven target was already set.
         });
     }
 
-    // The generation-tagged path this process would dlopen for `generation` - config_directory_ is
-    // the app's own private storage (Context.getFilesDir(), the same directory AppConfig/the
-    // durable snapshot already use), reachable by koreload_cli's private-storage push mode (adb
-    // push to a world-writable staging path, then a `run-as` copy - the same two-step M2's own
-    // non-root delivery research already proved necessary for a real installed app's own sandboxed
-    // storage, unlike koreload_receiver's plain adb-shell-invoked process).
-    std::string koreload_module_path(unsigned generation) const {
-        return config_directory_ + "/koreload_pointer_follow.gen" + std::to_string(generation) +
-               ".so";
+    // The generation-tagged path this process would dlopen for `module_name`/`generation` -
+    // config_directory_ is the app's own private storage (Context.getFilesDir(), the same
+    // directory AppConfig/the durable snapshot already use), reachable by koreload_cli's
+    // private-storage push mode (adb push to a world-writable staging path, then a `run-as` copy -
+    // the same two-step M2's own non-root delivery research already proved necessary for a real
+    // installed app's own sandboxed storage, unlike koreload_receiver's plain adb-shell-invoked
+    // process).
+    std::string koreload_module_path(const std::string& module_name, unsigned generation) const {
+        return config_directory_ + "/koreload_" + module_name + ".gen" +
+               std::to_string(generation) + ".so";
     }
 
     // Called from on_tick() - mirrors the AppConfig poll_reload() idiom above exactly (a periodic
-    // stat, not a blocking wait): checks whether the NEXT generation-tagged module file has
-    // appeared yet, and if so, reloads to it. Polling for the *next* path's existence rather than
-    // mtime-polling one fixed path is deliberate - section 16.1's generation-tagged-filename
+    // stat, not a blocking wait): checks whether either module's NEXT generation-tagged file has
+    // appeared yet, and if so, reloads to it, independently per module - reloading one never
+    // touches the other's own generation/handle. Polling for the *next* path's existence rather
+    // than mtime-polling one fixed path is deliberate - section 16.1's generation-tagged-filename
     // discipline exists specifically because Bionic caches dlopen() by path, so this process must
     // never dlopen the same path twice; a single fixed path would defeat that outright.
+    // ManagedModuleSlot<T>::poll() itself makes the load()-vs-reload() decision and advances the
+    // generation counter - see its own doc comment for why (recovering from a failed initial load
+    // needs load(), not reload(), the real bug this exact sequence found on-device before this
+    // logic was extracted into the library).
     void poll_koreload_reload() {
-        std::string next_path = koreload_module_path(koreload_pointer_follow_generation_ + 1);
-        std::error_code exists_ec;
-        if (!std::filesystem::exists(next_path, exists_ec) || exists_ec) {
+        poll_koreload_module(koreload_pointer_follow_slot_, "pointer_follow");
+        poll_koreload_module(koreload_waypoint_cycler_slot_, "waypoint_cycler");
+    }
+
+    template <class Interface>
+    void poll_koreload_module(koreload::ManagedModuleSlot<Interface>& slot, const char* name) {
+        // Observed (not decided) here, purely for the RELOAD-vs-LOAD log label below -
+        // ManagedModuleSlot::poll() makes the actual decision internally from this exact same
+        // fact.
+        const koreload::ModuleRecord* pre_record = koreload_registry_.find(slot.module_id());
+        bool was_active = pre_record && pre_record->state == koreload::ModuleState::Active;
+
+        std::optional<koreload::LoadStatus> status = slot.poll();
+        if (!status.has_value()) {
             return;
         }
-        koreload_registry_.update_path(koreload_pointer_follow_module_id_, next_path);
-
-        // ModuleRegistry::reload() requires the module to already be Active (PROMPT.md section
-        // 11.3's hot-swap contract - it rolls back to "the old handle/instance", which only
-        // exists if a prior load ever succeeded). If the INITIAL load failed, the record is
-        // still Failed/Discovered, never Active, so reload() would just early-return NotLoaded
-        // without even attempting the new path - silently never recovering, and (found on a
-        // real device) leaving record->last_error stuck on stage the original failure forever
-        // since NotLoaded's early return never touches it. load() is the correct call here: it
-        // re-attempts dlopen/dlsym against the just-updated loaded_path exactly like a first
-        // load would, and its own guard (`state == Active -> AlreadyLoaded`) makes it just as
-        // safe to call as reload() once the module IS Active.
-        const koreload::ModuleRecord* pre_record =
-            koreload_registry_.find(koreload_pointer_follow_module_id_);
-        bool was_active = pre_record && pre_record->state == koreload::ModuleState::Active;
-        koreload::LoadStatus status = was_active
-            ? koreload_registry_.reload(koreload_pointer_follow_module_id_)
-            : koreload_registry_.load(koreload_pointer_follow_module_id_);
-        const koreload::ModuleRecord* record = koreload_registry_.find(koreload_pointer_follow_module_id_);
+        const koreload::ModuleRecord* record = koreload_registry_.find(slot.module_id());
         konative::core::log_info(
-            "KonativeAndroidApp: KoReload pointer_follow module {} from {} -> status {}{}, "
-            "reload_survival_ticks={}",
-            was_active ? "RELOAD" : "LOAD (recovering from non-Active state)", next_path,
-            koreload_status_name(status),
-            (record && !record->last_error.empty() && !koreload_status_is_success(status))
-                ? (" (" + record->last_error + ")") : "",
-            koreload_pointer_follow_handle_ ? koreload_pointer_follow_handle_->reload_survival_ticks.ticks : 0);
-        if (status == koreload::LoadStatus::Ok) {
-            ++koreload_pointer_follow_generation_;
-        }
-        // Any other status (Crashed/NeedsFullRestart/...) deliberately leaves
-        // koreload_pointer_follow_generation_ unchanged - the registry itself already rolled back
-        // to the last-known-good instance (module_registry.cpp's own contract), and not advancing
-        // the counter here means the next poll retries the exact same path rather than silently
-        // skipping past a build the developer needs to know failed.
+            "KonativeAndroidApp: KoReload {} module {} -> status {}{}",
+            name, was_active ? "RELOAD" : "LOAD (recovering from non-Active state)",
+            koreload::to_string(*status),
+            (record && !record->last_error.empty() && !koreload::is_success(*status))
+                ? (" (" + record->last_error + ")") : "");
     }
 #endif
 
@@ -1072,9 +1086,8 @@ private:
     std::atomic<bool> snapshot_in_flight_{false};
 #if KONATIVE_ENABLE_KORELOAD
     koreload::ModuleRegistry koreload_registry_;
-    koreload::ModuleId koreload_pointer_follow_module_id_{};
-    koreload::InterfaceHandle<PointerFollowKoreloadInterface> koreload_pointer_follow_handle_;
-    unsigned koreload_pointer_follow_generation_ = 0;
+    koreload::ManagedModuleSlot<PointerFollowKoreloadInterface> koreload_pointer_follow_slot_;
+    koreload::ManagedModuleSlot<WaypointCyclerInterface> koreload_waypoint_cycler_slot_;
 #endif
 };
 
