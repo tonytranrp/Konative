@@ -25,6 +25,18 @@ endif()
 # spikes behind `KORELOAD_BUILD_SPIKES` (default OFF), so those two need no action here.
 set(KORELOAD_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(KORELOAD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+
+# KoReload's own root CMakeLists.txt unconditionally CPMAddPackage()s doctest (not gated behind
+# KORELOAD_BUILD_TESTS), and doctest v2.4.11's own cmake_minimum_required() floor is below what
+# CMake 4.x still supports - the exact same issue KonativeDependencies.cmake's own doctest fetch
+# already has this identical narrow fix for (see that file's own comment for the full reasoning,
+# including the earlier code-review finding that setting this globally in every CMakePresets.json
+# preset - which this integration briefly, incorrectly did too - silently lowers the floor for
+# every dependency, not just the one that needs it). A plain (non-cache) set() here is visible to
+# this add_subdirectory() call's own children in the same directory-variable-scope chain, so it
+# affects only KoReload's own configure, not anything else in this build.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 add_subdirectory(${KORELOAD_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/koreload_core_build)
+unset(CMAKE_POLICY_VERSION_MINIMUM)
 
 add_subdirectory(pointer_follow)
