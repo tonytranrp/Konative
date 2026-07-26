@@ -226,18 +226,39 @@ adb shell am start -n com.konative.testapp/.MainActivity
 adb logcat -s Konative:V AndroidRuntime:E DEBUG:E
 ```
 
-**Verified 2026-07-26, partially - real gap found and separately flagged, not the release config's
-own fault**: `signingConfigs`/the `release` build type's own Gradle Kotlin DSL is confirmed real and
-valid - `./gradlew help -PkonativeNdkPath=...` (a config-only invocation that evaluates the entire
-`build.gradle.kts`, including `signingConfigs.getByName("release")`'s own reference resolution)
-returned `BUILD SUCCESSFUL` with zero DSL errors. A full local `./gradlew assembleRelease` on this
-dev machine hit a **real, pre-existing, unrelated** bug instead: a large resolved Kotlin classpath
-(65 jars in `tools/kotlin-classpath-resolver/resolved-output/kotlin-classpath/` as of this writing)
-likely exceeds Windows' `cmd.exe` command-line length limit when kotlinc is invoked, corrupting the
-classpath argument - confirmed NOT caused by this signing/minification change (none of it touches
-classpath construction), and confirmed NOT to reproduce in CI, where `.github/workflows/
-android-build.yml`'s own jobs build the full kotlinc+aapt2+r8 native+dex pipeline successfully on
-every push (Linux's much higher `ARG_MAX` doesn't hit this same limit). Flagged as its own separate
-fix (a kotlinc `@argfile` response file is the standard remedy) rather than folded into this change.
-Once that's fixed, re-run the full sequence above and replace this note with a real "installed and
-launched cleanly" confirmation, matching the debug loop's own verified-end-to-end bar.
+**Verified 2026-07-26, end to end**: `signingConfigs`/the `release` build type's own Gradle Kotlin
+DSL is confirmed real and valid - `./gradlew help -PkonativeNdkPath=...` (a config-only invocation
+that evaluates the entire `build.gradle.kts`, including `signingConfigs.getByName("release")`'s own
+reference resolution) returned `BUILD SUCCESSFUL` with zero DSL errors.
+
+A full local `./gradlew assembleRelease` on this dev machine initially hit a **real, pre-existing,
+unrelated** bug: kotlinc's own `@argfile` reader follows the JDK response-file convention, which
+treats backslash as a string-escape introducer inside double-quoted values - a raw Windows path
+(backslash-separated) written into the classpath entry corrupted silently, dropping backslashes and
+producing "classpath entry points to a non-existent location" plus dozens of misleading "unresolved
+reference" errors. Not a command-line-length limit (the original working hypothesis) - the
+classpath was already going through an `@argfile`, not a raw command-line argument. Confirmed NOT
+caused by this signing/minification change (none of it touches classpath construction), and
+confirmed NOT to reproduce in CI, where `.github/workflows/android-build.yml`'s own jobs build the
+full kotlinc+aapt2+r8 native+dex pipeline successfully on every push (every path there was always
+forward-slash already, from `CMakeUserPresets.json`'s own convention or CMake's own generator-
+expression/GLOB output - nothing had exercised a genuinely backslash-laden path before this).
+**Fixed** in `cmake/modules/KonativeCompileKotlinDex.cmake` with `file(TO_CMAKE_PATH ...)`
+normalization on the two affected variables before they reach the argfile.
+
+Re-ran the full sequence above with the fix applied: `./gradlew assembleRelease ...` exited 0 and
+produced a real `app-release.apk` (8.8 MB, smaller than the debug APK's 19.3 MB, consistent with R8
+minification actually running); `apksigner verify --verbose` confirmed it genuinely signed (v2
+scheme, 1 signer); `adb install -r app-release.apk` succeeded **without** `-t` (the real, checkable
+non-testOnly distinction this doc calls out above); `adb shell am start` + `adb logcat -s
+Konative:V AndroidRuntime:E DEBUG:E` showed the same clean self-check-PASSED/Compose-render bar the
+debug loop already establishes - all on-device self-checks (Taskflow, GLM+EnTT storage,
+BS::thread_pool, SPSC queue x2, EnTT snapshot+cereal, Boost.PFR+entt::meta, entt::meta+Glaze,
+spatial::Transform) PASSED, `tryInstallGeneralResourcesLoader` confirmed the real `resources.arsc`
+loaded and verified, and ~15 seconds of continuous `on_tick` frames + periodic `SnapshotSavedEvent`
+persistence ran with zero `AndroidRuntime:E`/`DEBUG:E` output. Also re-verified a plain `./gradlew
+assembleDebug` (no `KONATIVE_ENABLE_KORELOAD`) still builds cleanly with the fix in place, since
+`KonativeCompileKotlinDex.cmake` is shared by every Kotlin/dex-embedding build in the project, not
+just this release path - confirmed via a fresh CMake reconfigure (new `.cxx` config hash, so the
+fixed script's `DEPENDS`-tracked change was genuinely picked up, not skipped as up-to-date) that
+regenerated `classes.dex` for both ABIs and finished `BUILD SUCCESSFUL`.

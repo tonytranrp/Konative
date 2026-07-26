@@ -15,6 +15,35 @@ foreach(_required
   endif()
 endforeach()
 
+# Real, reproduced bug (confirmed via a real failing build, not reasoned about): kotlinc's
+# @argfile reader follows the JDK response-file convention, which treats backslash as a string-
+# escape INTRODUCER inside double-quoted values (the same family of convention Java source string
+# literals use) - a backslash that doesn't form one of its recognized escapes (\\, \", \n, \t, ...)
+# is silently CONSUMED, dropping the backslash and keeping only the following character. A plain
+# Windows path like "C:\Users\...\kotlin-classpath\activity-1.7.0.jar" written verbatim into
+# -classpath's quoted value comes back on the other side as literal garbage
+# ("C:UsersTonytkotlin-classpath\activity-1.7.0.jar" - every backslash gone except the one right
+# before the filename, which came from a DIFFERENT, forward-slash-joined path segment and just got
+# Windows-normalized back to "\" on the way through) - surfacing as "classpath entry points to a
+# non-existent location" warnings and then dozens of misleading "unresolved reference" errors for
+# ordinary android/androidx classes, not a classpath-specific error message. This was always
+# latent - every prior successful local/CI build happened to receive these two variables already
+# forward-slash-formed (CMakeUserPresets.json's own convention, or CMake's own generator-expression/
+# GLOB output, both already "/"-only), so nothing had ever exercised this exact code path with a
+# genuinely backslash-laden Windows path before. `file(TO_CMAKE_PATH ...)` converts a native
+# (possibly backslash) path to CMake's own forward-slash form - Java/kotlinc has always accepted
+# "/" as a path separator on Windows (a long-standing, reliable JVM convention), so this is a safe,
+# unconditional normalization, not a workaround specific to one caller's input style. Scoped to
+# exactly the two variables that end up inside a double-quoted kotlinc argfile value below
+# (KONATIVE_COMPOSE_PLUGIN already only ever arrives forward-slash, from the caller's own
+# get_filename_component(... ABSOLUTE) - normalized anyway, defensively, since it costs nothing).
+# r8's OWN argfile (further below) deliberately does NOT get this treatment - it has no quoting at
+# all (a real, different, already-documented constraint - see that argfile's own comment), so this
+# specific escape-corruption class cannot occur there regardless of separator style.
+file(TO_CMAKE_PATH "${KONATIVE_ANDROID_JAR}" KONATIVE_ANDROID_JAR)
+file(TO_CMAKE_PATH "${KONATIVE_CLASSPATH_DIR}" KONATIVE_CLASSPATH_DIR)
+file(TO_CMAKE_PATH "${KONATIVE_COMPOSE_PLUGIN}" KONATIVE_COMPOSE_PLUGIN)
+
 set(_classes_dir "${KONATIVE_GEN_DIR}/classes")
 set(_dex_dir "${KONATIVE_GEN_DIR}/dex")
 file(REMOVE_RECURSE "${_classes_dir}")
