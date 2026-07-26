@@ -346,11 +346,13 @@ on-device install+launch on the connected LDPlayer emulator showed clean logcat,
 passing, and correct touch-input handling — the same verification bar every other real fix in this
 README is held to.
 
-**Not yet wired as the default**: `KONATIVE_KOTLIN_CLASSPATH_DIR`/`KONATIVE_AAPT2_AAR_DIR` still point
-at the original hand-assembled directories on this dev machine until the resolver is wired into an
-actual CI job (tracked separately) — so a fresh checkout with no pre-existing hand-assembled classpath
-can still build without also needing this resolver run first. This update records that the manual-
-assembly gap is solved and reproducible, not that every consumer has switched to it yet.
+**Now wired into CI** (`.github/workflows/android-build.yml` — all three jobs that build the
+Kotlin/Compose dex run `./gradlew resolveKonativeClasspath` and feed its output straight into the
+CMake/Gradle configure step; `KONATIVE_KOTLIN_CLASSPATH_DIR`/`KONATIVE_AAPT2_AAR_DIR` point at the
+resolver's own output there, not a hand-assembled directory). This dev machine's own
+`CMakeUserPresets.json` still points at the original hand-assembled directories for local
+iteration — nothing forces switching a working local setup — but the "never actually wired into
+CI" gap this note used to describe is closed.
 
 ## Adding to this folder
 
