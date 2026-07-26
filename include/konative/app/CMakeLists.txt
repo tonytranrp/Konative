@@ -10,9 +10,14 @@ target_sources(konative_app INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/config/json_config_file.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/entry_point.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/detail/lifecycle_bridge.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pointer_follow.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pointer_follow_koreload_interface.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pointer_follow_serialize.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pointer_follow_system.hpp
 )
 
 # konative::reflect: config/json_config_file.hpp reads/writes component structs through the
 # entt::meta + Glaze pairing (meta_glaze_json.hpp) - a real dependency of this module now, not a
-# jni_onload.cpp-only concern.
-target_link_libraries(konative_app INTERFACE konative::core konative::ecs konative::events konative::reflect)
+# jni_onload.cpp-only concern. konative::spatial: pointer_follow_system.hpp's real dependency
+# (Transform + approach()).
+target_link_libraries(konative_app INTERFACE konative::core konative::ecs konative::events konative::reflect konative::spatial)

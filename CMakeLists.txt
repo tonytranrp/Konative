@@ -16,6 +16,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
 option(KONATIVE_BUILD_EXAMPLES "Build examples/" ${PROJECT_IS_TOP_LEVEL})
 option(KONATIVE_BUILD_TESTS "Build tests/" ${PROJECT_IS_TOP_LEVEL})
 option(KONATIVE_BUILD_KOTLIN_NATIVE "Compile and link the Kotlin/Native side (native/) - fully superseded for rendering (ARCHITECTURE.md section 9), default OFF; opt in only to revive this frozen path for a real non-rendering need - see section 6.3 for the linking risk that carries" OFF)
+option(KONATIVE_ENABLE_KORELOAD "Build src/koreload_modules/ and hot-reload the PointerFollow system through KoReload (github.com/tonytranrp/Konative sibling project) instead of linking it statically - dev-only, default OFF, adds nothing to a normal build. See PROMPT.md section 13 M8 in the KoReload repo." OFF)
 
 # See ARCHITECTURE.md section 4 - CPM.cmake is vendored in-tree (cmake/CPM.cmake), never
 # downloaded fresh at configure time, so that a cold clone + a warm CPM_SOURCE_CACHE can
@@ -39,6 +40,14 @@ endif()
 include(KonativeDependencies)
 
 add_subdirectory(include/konative)
+
+# Before add_subdirectory(src): src/platform/android/CMakeLists.txt links against koreload::core
+# when KONATIVE_ENABLE_KORELOAD is ON, so that target must already exist by the time it's
+# processed.
+if(ANDROID AND KONATIVE_ENABLE_KORELOAD)
+  add_subdirectory(src/koreload_modules)
+endif()
+
 add_subdirectory(src)
 
 if(ANDROID AND KONATIVE_BUILD_KOTLIN_NATIVE)

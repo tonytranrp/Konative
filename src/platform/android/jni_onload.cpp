@@ -6,10 +6,12 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <sstream>
 #include <span>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <tuple>
 #include <utility>
@@ -21,6 +23,17 @@
 #include "konative/app/application.hpp"
 #include "konative/app/config/json_config_file.hpp"
 #include "konative/app/entry_point.hpp"
+#include "konative/app/pointer_follow.hpp"
+#include "konative/app/pointer_follow_serialize.hpp"
+#include "konative/app/pointer_follow_system.hpp"
+
+#if KONATIVE_ENABLE_KORELOAD
+#include "konative/app/pointer_follow_koreload_interface.hpp"
+
+#include <koreload/crash_guard.hpp>
+#include <koreload/interface_handle.hpp>
+#include <koreload/module_registry.hpp>
+#endif
 #include "konative/core/log.hpp"
 #include "konative/ecs/glm_storage_self_check.hpp"
 #include "konative/ecs/registry.hpp"
@@ -91,27 +104,21 @@ void serialize(Archive& archive, HeartbeatCounter& counter) {
 
 // spatial::Transform's first real consumer (spatial/README.md's own "no rendering or physics
 // consumer yet" caveat, closed): pairs with a Transform on ONE demo entity whose position a real
-// System (move_followers_toward_targets below) glides toward `target` every tick via
+// System (move_followers_toward_targets, below) glides toward `target` every tick via
 // spatial::approach(). Touch input SETS the target (the first real EFFECT touch events have on ECS
 // state - until now they only incremented a counter), the first WindowResizedEvent centers the
 // initial target so the dot visibly glides to screen center on a fresh launch (that event's first
 // real effect too), and the Kotlin side reads the live position back per frame
 // (nativeGetFollowerX/Y) to place a real rendered Compose dot - C++ ECS spatial state driving
 // visible UI, the framework's actual value proposition, end to end.
-struct PointerFollow {
-    glm::vec3 target{0.0F, 0.0F, 0.0F};
-    // ~8 time constants per second: visibly smooth glide that settles in roughly a quarter
-    // second - demo-tuned, and genuinely overridable at runtime once a config need appears.
-    float approach_rate = 8.0F;
-};
-
-// Same ADL requirement as HeartbeatCounter's serialize() above - PointerFollow is part of the
-// durable snapshot (kAppStateVersion 2), so the dot's target survives a process kill along with
-// its Transform position.
-template <class Archive>
-void serialize(Archive& archive, PointerFollow& follow) {
-    archive(follow.target.x, follow.target.y, follow.target.z, follow.approach_rate);
-}
+//
+// PointerFollow itself (struct + serialize() + the move_followers_toward_targets system) now lives
+// in konative/app/pointer_follow{,_serialize,_system}.hpp, not this anonymous namespace - moved out
+// specifically so src/koreload_modules/pointer_follow/ (KONATIVE_ENABLE_KORELOAD, see PROMPT.md
+// section 13 M8 in the KoReload repo) can compile the identical struct layout and identical system
+// logic from the identical headers, instead of a hand-copied duplicate that could silently drift.
+using konative::app::PointerFollow;
+using konative::app::move_followers_toward_targets;
 
 // Lets on_started() below reflect HeartbeatCounter with konative::reflect::reflect_component<T>() -
 // include/konative/reflect/ (entt::meta registration + emplace-by-id thunk) had real desktop test
@@ -159,18 +166,10 @@ void increment_heartbeat_counters(konative::ecs::Registry& registry, float /*del
     }
 }
 
-// The second real System in the shipping app, and the first one that consumes real spatial data:
-// glides every [Transform, PointerFollow] entity toward its target each frame via
-// spatial::approach() (exponential smoothing, frame-rate independent - that header's own contract,
-// desktop-tested). The per-entity MATH lives in spatial/ as a pure operation on Transform data;
-// only this registry-iterating shell is app code - exactly the data-vs-system split
-// spatial/README.md draws.
-void move_followers_toward_targets(konative::ecs::Registry& registry, float delta_seconds) {
-    for (auto [entity, transform, follow] :
-         registry.view<konative::spatial::Transform, PointerFollow>().each()) {
-        konative::spatial::approach(transform, follow.target, follow.approach_rate, delta_seconds);
-    }
-}
+// move_followers_toward_targets (the second real System in the shipping app, and the first one
+// that consumes real spatial data - glides every [Transform, PointerFollow] entity toward its
+// target each frame via spatial::approach()) now lives in
+// konative/app/pointer_follow_system.hpp - see the using-declaration above.
 
 // Resolved the "real open item, not yet decided" that both include/konative/app/entry_point.hpp
 // and include/konative/app/detail/lifecycle_bridge.hpp's own doc comments used to flag (both
@@ -191,6 +190,29 @@ void move_followers_toward_targets(konative::ecs::Registry& registry, float delt
 // KonativeEntryPoint.kt's own frame-callback loop and native_dispatch_tick below) - Compose
 // (JVM-hosted) still owns real rendering/frame scheduling; this is a SEPARATE, additive per-frame
 // heartbeat for the C++ ECS/systems side, not a rendering driver.
+#if KONATIVE_ENABLE_KORELOAD
+// Human-readable koreload::LoadStatus names for real logcat diagnostics - mirrors
+// examples/koreload_receiver/main.cpp's own status_name() in the KoReload repo exactly (same
+// enum, same reasoning: raw ints in a log line are useless without cross-referencing the header).
+const char* koreload_status_name(koreload::LoadStatus status) {
+    switch (status) {
+        case koreload::LoadStatus::Ok: return "Ok";
+        case koreload::LoadStatus::Failed: return "Failed";
+        case koreload::LoadStatus::Crashed: return "Crashed";
+        case koreload::LoadStatus::AlreadyLoaded: return "AlreadyLoaded";
+        case koreload::LoadStatus::NotLoaded: return "NotLoaded";
+        case koreload::LoadStatus::MissingDependency: return "MissingDependency";
+        case koreload::LoadStatus::IncompatibleDependencyVersion: return "IncompatibleDependencyVersion";
+        case koreload::LoadStatus::DependencyCycle: return "DependencyCycle";
+        case koreload::LoadStatus::HasDependents: return "HasDependents";
+        case koreload::LoadStatus::NeedsFullRestart: return "NeedsFullRestart";
+        case koreload::LoadStatus::StateTransferFailed: return "StateTransferFailed";
+        case koreload::LoadStatus::StateTransferCrashed: return "StateTransferCrashed";
+    }
+    return "Unknown";
+}
+#endif
+
 class KonativeAndroidApp final : public konative::app::Application {
 public:
     void on_started() override {
@@ -565,7 +587,11 @@ public:
                     transform.position.x, transform.position.y);
             }
         }
+#if KONATIVE_ENABLE_KORELOAD
+        setup_koreload_pointer_follow_module();
+#else
         world().systems().add(&move_followers_toward_targets);
+#endif
 
         // Resolves the other "defined since early on, never actually dispatched" open item:
         // events/input/Touch{Down,Move,Up}Event.hpp existed with nothing anywhere in the codebase
@@ -627,6 +653,14 @@ public:
         // half-parsed edit (it parses into a copy and assigns only on full success). Runs BEFORE
         // this frame's own app_config read below, so an edit takes effect the same frame it's
         // noticed, not one poll interval later.
+#if KONATIVE_ENABLE_KORELOAD
+        // Same poll cadence as AppConfig's own hot-reload below - real, measured tick rates on
+        // both devices (kConfigPollIntervalTicks' own comment), not a separately-tuned interval.
+        if (tick_count_ % kConfigPollIntervalTicks == 0) {
+            poll_koreload_reload();
+        }
+#endif
+
         if (config_file_ && tick_count_ % kConfigPollIntervalTicks == 0) {
             auto& live_config = world().registry().ctx().get<konative::app::AppConfig>();
             switch (config_file_->poll_reload(live_config)) {
@@ -800,6 +834,81 @@ public:
     }
 
 private:
+#if KONATIVE_ENABLE_KORELOAD
+    // KONATIVE_ENABLE_KORELOAD only - PROMPT.md section 13 M8 in the KoReload repo. Registers and
+    // loads src/koreload_modules/pointer_follow/'s real .so through koreload::ModuleRegistry,
+    // repoints koreload_pointer_follow_handle_ on every successful load/reload, and calls
+    // world().systems().add() EXACTLY ONCE for the whole process lifetime - SystemSequence has no
+    // removal API, so calling add() again on every reload would run every past generation's system
+    // every frame instead of just the latest. The InterfaceHandle<T> indirection is what lets one
+    // registered wrapper always call through to whichever generation is currently live.
+    void setup_koreload_pointer_follow_module() {
+        koreload::install_crash_handlers();
+
+        koreload_pointer_follow_generation_ = 1;
+        std::string initial_path = koreload_module_path(koreload_pointer_follow_generation_);
+        koreload_pointer_follow_module_id_ = koreload_registry_.register_module(
+            "pointer_follow", initial_path, "koreload_module_create");
+        koreload_registry_.subscribe(koreload_pointer_follow_module_id_, [this](void* instance) {
+            koreload_pointer_follow_handle_.repoint(
+                static_cast<PointerFollowKoreloadInterface*>(instance));
+        });
+
+        koreload::LoadStatus status = koreload_registry_.load(koreload_pointer_follow_module_id_);
+        konative::core::log_info(
+            "KonativeAndroidApp: KoReload pointer_follow module initial load from {} -> status {}",
+            initial_path, koreload_status_name(status));
+
+        world().systems().add([this](konative::ecs::Registry& registry, float delta_seconds) {
+            if (koreload_pointer_follow_handle_) {
+                koreload_pointer_follow_handle_->tick(&registry, delta_seconds);
+            }
+            // No handle yet (initial load failed, or hasn't succeeded again after a crashed
+            // reload) - the follower entity simply doesn't move this process, the same "clean,
+            // visible absence, never a crash" every other guarded system in this file fails
+            // toward.
+        });
+    }
+
+    // The generation-tagged path this process would dlopen for `generation` - config_directory_ is
+    // the app's own private storage (Context.getFilesDir(), the same directory AppConfig/the
+    // durable snapshot already use), reachable by koreload_cli's private-storage push mode (adb
+    // push to a world-writable staging path, then a `run-as` copy - the same two-step M2's own
+    // non-root delivery research already proved necessary for a real installed app's own sandboxed
+    // storage, unlike koreload_receiver's plain adb-shell-invoked process).
+    std::string koreload_module_path(unsigned generation) const {
+        return config_directory_ + "/koreload_pointer_follow.gen" + std::to_string(generation) +
+               ".so";
+    }
+
+    // Called from on_tick() - mirrors the AppConfig poll_reload() idiom above exactly (a periodic
+    // stat, not a blocking wait): checks whether the NEXT generation-tagged module file has
+    // appeared yet, and if so, reloads to it. Polling for the *next* path's existence rather than
+    // mtime-polling one fixed path is deliberate - section 16.1's generation-tagged-filename
+    // discipline exists specifically because Bionic caches dlopen() by path, so this process must
+    // never dlopen the same path twice; a single fixed path would defeat that outright.
+    void poll_koreload_reload() {
+        std::string next_path = koreload_module_path(koreload_pointer_follow_generation_ + 1);
+        std::error_code exists_ec;
+        if (!std::filesystem::exists(next_path, exists_ec) || exists_ec) {
+            return;
+        }
+        koreload_registry_.update_path(koreload_pointer_follow_module_id_, next_path);
+        koreload::LoadStatus status = koreload_registry_.reload(koreload_pointer_follow_module_id_);
+        konative::core::log_info(
+            "KonativeAndroidApp: KoReload pointer_follow module RELOAD from {} -> status {}",
+            next_path, koreload_status_name(status));
+        if (status == koreload::LoadStatus::Ok) {
+            ++koreload_pointer_follow_generation_;
+        }
+        // Any other status (Crashed/NeedsFullRestart/...) deliberately leaves
+        // koreload_pointer_follow_generation_ unchanged - the registry itself already rolled back
+        // to the last-known-good instance (module_registry.cpp's own contract), and not advancing
+        // the counter here means the next poll retries the exact same path rather than silently
+        // skipping past a build the developer needs to know failed.
+    }
+#endif
+
     // Logs every occurrence, unlike on_tick()'s periodic summary above - real touches are
     // discrete/user-paced (nowhere near 60-120Hz), so there's no flood risk, and seeing every one
     // (with its real coordinates) is exactly the point of a first on-device verification pass.
@@ -917,6 +1026,12 @@ private:
     // within the writer thread it gates - std::atomic, not a plain bool, because that clear is a
     // genuine cross-thread write.
     std::atomic<bool> snapshot_in_flight_{false};
+#if KONATIVE_ENABLE_KORELOAD
+    koreload::ModuleRegistry koreload_registry_;
+    koreload::ModuleId koreload_pointer_follow_module_id_{};
+    koreload::InterfaceHandle<PointerFollowKoreloadInterface> koreload_pointer_follow_handle_;
+    unsigned koreload_pointer_follow_generation_ = 0;
+#endif
 };
 
 // Function-local static, same singleton-via-static pattern examples/minimal_triangle/main.cpp's

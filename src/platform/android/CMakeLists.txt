@@ -27,6 +27,16 @@ target_link_libraries(konative_app_native PRIVATE
   log
 )
 
+# Always defined (0 or 1), not just when ON, so jni_onload.cpp's #if KONATIVE_ENABLE_KORELOAD
+# checks are unambiguous regardless of the option's value - PROMPT.md section 13 M8 in the
+# KoReload repo.
+target_compile_definitions(konative_app_native PRIVATE
+  KONATIVE_ENABLE_KORELOAD=$<BOOL:${KONATIVE_ENABLE_KORELOAD}>
+)
+if(KONATIVE_ENABLE_KORELOAD)
+  target_link_libraries(konative_app_native PRIVATE koreload::core)
+endif()
+
 if(KONATIVE_EMBEDDED_DEX_PATH)
   konative_embed_binary_blob(konative_app_native
     BLOB "${KONATIVE_EMBEDDED_DEX_PATH}"
