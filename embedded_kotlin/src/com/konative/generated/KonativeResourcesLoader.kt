@@ -121,9 +121,10 @@ fun tryInstallGeneralResourcesLoader(activity: Activity, resourcesArscBuffer: By
             // scoped patch, but without this, a table that loads successfully yet fails this
             // specific field lookup (e.g. a future AAPT2 relink reassigning this id) would leave
             // BOTH mechanisms layered on the same AssetManager instead of either/or - a real gap a
-            // 2026-07-22 code-review pass found was never actually exercised in testing (this
-            // file's own README note only ever forced an early return before addLoaders() ran, not
-            // this genuine post-mutation failure path).
+            // 2026-07-22 code-review pass found was never actually exercised in testing, forced for
+            // real and confirmed working on-device 2026-07-26 (embedded_kotlin/README.md's own
+            // dated update has the full logcat evidence - the failure detected correctly,
+            // removeLoaders() genuinely ran, and the fallback left the app fully working).
             activity.resources.removeLoaders(loader)
             Log.e(
                 "Konative",

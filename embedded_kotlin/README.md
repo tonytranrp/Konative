@@ -354,6 +354,31 @@ resolver's own output there, not a hand-assembled directory). This dev machine's
 iteration — nothing forces switching a working local setup — but the "never actually wired into
 CI" gap this note used to describe is closed.
 
+## Update (2026-07-26) — the post-mutation `removeLoaders()` fallback path, forced and confirmed for real
+
+`KonativeResourcesLoader.kt`'s own comment on its self-check used to say the addLoaders()-succeeded-
+but-getString()-failed cleanup branch "was never actually exercised in testing" (a real gap a
+2026-07-22 code-review pass found, not a hypothetical one). Closed for real, not just reasoned
+about: temporarily swapped the self-check's verify-ID to a deliberately-unassigned one
+(`0x7f08dead` in place of the real `0x7f08001b`), rebuilt, and deployed to the real LDPlayer x86_64
+emulator via the direct-`cmake --build`-plus-root-push path. Confirmed via logcat, in order:
+
+```
+tryInstallGeneralResourcesLoader: removeLoaders() completed (TEMPORARY verification instrumentation)
+tryInstallGeneralResourcesLoader: addLoaders() succeeded but Resources.getString() still fails for
+  a known field (android.content.res.Resources$NotFoundException: String resource ID #0x7f08dead)
+  - removed the loader and falling back to the scoped string override instead.
+```
+
+— the deliberate failure was detected correctly, `removeLoaders()` genuinely ran (not just that the
+catch block was entered), and the app kept ticking normally afterward with **no crash**. A
+screenshot taken immediately after confirmed the Compose UI rendered completely normally, including
+the "Konative Test App" title text itself — real proof the fallback (`KonativeResourceStringOverride`)
+took over and genuinely works, not just that the app happened to survive with broken UI. Reverted
+both temporary edits (`git diff` clean afterward), rebuilt, redeployed, and confirmed the normal
+path returns: `tryInstallGeneralResourcesLoader: real resources.arsc loaded and verified
+successfully (API 34).`
+
 ## Adding to this folder
 
 New `@Composable` UI, new `ActivityLifecycleCallbacks` behavior, new state — all real Kotlin here,
