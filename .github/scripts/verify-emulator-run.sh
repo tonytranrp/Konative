@@ -42,13 +42,21 @@ adb install -t -r "$APK_PATH"
 # found - the app started cleanly, but neither module ever logged "status Ok", because nothing had
 # ever pushed a generation-1 module file into config_directory_). Push both module .sos the same
 # way koreload_cli's own push_to_app_storage() does for a real non-root device: stage under
-# /data/local/tmp, then `run-as` copy into the app's own private storage - run-as works right after
-# install, the app doesn't need to have been launched first (PackageManager creates the private
-# data directory at install time). Matches koreload_module_path()'s own real naming convention
-# (jni_onload.cpp) exactly - koreload_<name>.gen1.so.
+# /data/local/tmp, then `run-as` copy into the app's own private storage.
+#
+# Real, on-device-confirmed correction to an assumption this job's own SECOND CI run disproved: the
+# private files/ directory is NOT created by PackageManager at install time - `cp`/`chmod` both
+# failed with "No such file or directory" on a genuinely fresh install that had never been launched
+# yet. Context.getFilesDir() creates it lazily, on first real use - koreload_cli's own
+# push_to_app_storage() never hits this in normal use because it always runs against an
+# ALREADY-launched app (real iterative development), a case this CI job is the first to NOT match
+# (push happens before the very first launch). Fixed with an explicit `run-as mkdir -p` first.
+# Matches koreload_module_path()'s own real naming convention (jni_onload.cpp) exactly -
+# koreload_<name>.gen1.so.
 if [ "${KORELOAD_EXPECTED:-0}" = "1" ]; then
   PKG="com.konative.testapp"
   FILES_DIR="/data/data/$PKG/files"
+  adb shell run-as "$PKG" mkdir -p "$FILES_DIR"
   for pair in "pointer_follow:$REPO_DIR/build/android-x86_64/src/koreload_modules/pointer_follow/konative_pointer_follow.so" \
               "waypoint_cycler:$REPO_DIR/build/android-x86_64/src/koreload_modules/waypoint_cycler/konative_waypoint_cycler.so"; do
     name="${pair%%:*}"
